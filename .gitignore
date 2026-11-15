@@ -20,3 +20,6 @@ auth.json
 storage-state.json
 screenshots/
 .DS_Store
+
+.vercel/
+public/LICENSE.txt

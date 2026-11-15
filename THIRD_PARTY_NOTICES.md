@@ -97,3 +97,12 @@ THE SOFTWARE.
 - Fontsource 分发的 Arimo / Tinos / Cousine 5.3.0，只嵌入 Latin、400、normal 的 WOFF 字体，未修改字体文件。字体采用 SIL Open Font License 1.1；原始版权及许可见 [Arimo](licenses/arimo.txt)、[Tinos](licenses/tinos.txt)、[Cousine](licenses/cousine.txt)。运行时的 Arial / Times New Roman / Courier New 名称映射到这些替代字体，并不包含微软字体，也不宣称像素完全相同。
 
 生成的运行文件存放在忽略目录 `src/generated/`，来源由 `package-lock.json` 锁定。分发构建产物时应一并保留本说明和 `licenses/`。
+
+## Vercel Chromium 运行时
+
+- [Playwright](https://github.com/microsoft/playwright) 1.65.1，Apache-2.0；[许可](licenses/playwright.txt)、[NOTICE](licenses/playwright-notice.txt)。
+- [@sparticuz/chromium](https://github.com/Sparticuz/chromium) 153.0.0，打包器 MIT；[许可](licenses/sparticuz-chromium.txt)。Chromium 二进制及其第三方组件仍适用各自许可，由锁定的 npm 包分发。
+- [@vercel/blob](https://github.com/vercel/storage) 2.9.0，Apache-2.0；[许可](licenses/vercel-blob.txt)。
+- 定时任务使用 Vercel 官方 `@vercel/schedules` 0.0.3 SDK；接口仍处于 Beta，使用方法见 [官方文档](https://vercel.com/docs/schedules/handle-runs)。
+
+仓库不保存浏览器二进制或用户登录数据；依赖版本由 `package-lock.json` 锁定，安装和部署时获取。

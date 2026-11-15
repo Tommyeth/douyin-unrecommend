@@ -1,253 +1,134 @@
 # 抖音推荐防误触
 
-发现自己不小心点了「推荐」？这个工具定时读取**个人主页 → 推荐**，支持发消息提醒，也支持检测后自动取消。
+定时检查自己在抖音推荐过的作品，发现新增推荐时发消息提醒，或在检测到后自动取消。支持中文管理页、官方二维码登录、批量预览清理、Bark / 企业微信机器人 / Webhook / SMTP 邮箱。
 
-**纯 Cloudflare 部署，无需自备服务器；也可在普通服务器或 Docker 中运行。中文界面、中文文档，MIT 开源。**
+**Vercel 版使用真实 Chromium，网页、扫码会话、每小时任务和加密状态都运行在 Vercel，无需自备服务器或 Cloudflare 账号。**
 
-> v0.2 正在验证纯协议实现，尚未完成真实账号登录、推荐读取和取消的整体验收。补齐动态环境校验后，最近一次手机确认仍返回错误码 `7`，未取得登录态。现已将空 DOM/Canvas 替换为 LinkeDOM 与 Skia CanvasKit，36 项自动测试及 workerd + D1 测试通过；缓存的真实环境脚本也能离线执行。模拟上游测试及脚本执行成功不能替代真实账号验证。请勿把当前版本视为已验证可长期运行。
+> 当前正在进行真实账号验收。Vercel Hobby 已成功部署、创建私有 Blob 并启用每小时 Schedules，真实 Chromium 已打开抖音官方二维码。扫码登录落地、读取推荐和取消是否通过，以 [Vercel 验证记录](docs/vercel-verification.md) 为准；自动测试使用模拟抖音响应，不替代真实账号验收。
 
-## 两种工作模式
+## 两种模式
 
-| 模式                    | 行为                                           | 适用场景                     |
-| ----------------------- | ---------------------------------------------- | ---------------------------- |
-| 仅提醒 `notify`（默认） | 发现新增推荐，发送消息，保留推荐记录           | 希望自己判断是否误触         |
-| 自动取消 `auto_cancel`  | 每轮发现推荐就尝试取消，并通过推荐列表接口复核 | 希望清除已有及以后误触的推荐 |
+| 模式                    | 行为                                                                     |
+| ----------------------- | ------------------------------------------------------------------------ |
+| `notify` 仅提醒（默认） | 发现新增推荐时发送消息，保留推荐；需配置至少一个通知渠道                 |
+| `auto_cancel` 自动取消  | 处理已有及新增推荐，保留名单除外；取消后读取完整列表，确认移除才记录成功 |
 
-- 管理页面可以切换模式和检测间隔，设置保存在数据库，重启不丢失。
-- 默认每 **3600 秒（一小时）**检测，可调为 **7200 秒（两小时）**，最少 **60 秒**。这是轮询，不能监听手机点击瞬间；“立即取消”指检测到之后立即处理。调度对齐、网络耗时、失败退避和单批上限会增加延迟。
-- 首次运行会把已有推荐当作首次发现并提醒；之后同一条仍在列表中的推荐不会反复提醒。完整扫描确认移除后，再次推荐会产生新的提醒。
-- 自动取消也会处理历史记录，每轮最多 5 条，剩余记录下轮继续。`IGNORE_IDS` 中的作品不提醒、不取消。
-- “新增推荐”不等于“误触”，程序不推断用户意图。
-- 另有**批量清理**：预览本批 → 确认取消 → 逐条核实。它不受当前工作模式影响。
+默认**每小时检查一次**。管理页支持 1–24 个整小时；检测到后立即处理，但不会实时监听手机误触。免费 Schedules 有 15 分钟调度窗口，网络耗时和失败退避也会增加延迟。两次检查之间发生又撤回的推荐可能被漏过。
 
-## 纯协议架构
+首次完整检查会将已有推荐视为首次发现。保留的推荐不会重复提醒，完整扫描确认消失后再次出现则重新提醒。另有「预览本批 → 确认取消 → 复核」的批量清理功能，预览令牌一次有效，每批默认最多 5 条。
 
-```mermaid
-flowchart LR
-  A[管理页：展示二维码 / 模式 / 批量清理] --> W[Cloudflare Worker]
-  C[Cron 每分钟调度] --> W
-  W --> D[(D1：加密会话 / 去重 / 待发队列)]
-  W --> P[TypeScript：Cookie / Passport / a_bogus / CSRF]
-  P --> R[抖音 HTTP 接口]
-  W --> N[Bark / 企业微信 / Webhook / SMTP]
-```
+## Vercel 部署
 
-后端使用 HTTP、加密 API、QuickJS / CanvasKit WebAssembly、D1 和 SMTP TCP socket。**不安装 Playwright、Chromium，不绑定 Cloudflare Browser Run，也不调用外置签名服务。** QuickJS 在隔离的 JavaScript 引擎中处理平台返回的登录环境脚本，不启动浏览器。服务器版本使用相同协议代码，存储换成 SQLite。管理页只展示官方接口返回的二维码，扫码确认仍需用户在抖音 App 中完成。
-
-协议路径：
-
-| 步骤         | 接口 / 实现                                                             |
-| ------------ | ----------------------------------------------------------------------- |
-| 登录前置校验 | 匿名设备注册、会话令牌、登录引导、凭证交换及 `/passport/web/challenge/` |
-| 生成二维码   | `GET /passport/web/get_qrcode/`                                         |
-| 检查扫码状态 | `POST /passport/web/check_qrconnect/`，跟随受限域名内的登录跳转         |
-| 确认本人账号 | `GET /aweme/v1/web/user/profile/self/`                                  |
-| 读取推荐     | `GET /aweme/v1/web/familiar/recommend/feed/`，按游标分页                |
-| 取消推荐     | `POST /aweme/v1/web/familiar/recommend/cancel`                          |
-
-签名由本地 TypeScript 生成；先注册匿名设备、校验 `ttwid`，通过 P-256 / ECDH / HKDF / HMAC 交换登录凭证，并获取服务器签发的 `msToken`。私钥随会话加密保存，响应中的令牌轮换会写回 Cookie；每轮业务操作前刷新令牌。Cookie 按域名、路径和有效期管理。取消前获取 CSRF 凭证，表单为 `item_id=<作品ID>&source=0&type=2`；成功后重新读取完整推荐列表，确认该作品消失才记录成功。不会把「喜欢」接口当成推荐接口，也不会重放旧签名。
-
-环境校验使用同一会话的页面 Cookie、设备指纹及 SDK 参数；平台返回的动态脚本在独立 QuickJS 上下文中运行，堆内存限制 32 MiB，另设指令、异步任务、脚本及输出大小限制。脚本不能调用宿主网络、文件系统或环境变量，也不接收账号 Cookie、管理员口令或加密密钥。二维码生成前校验失败就停止，不让用户扫描缺少前置状态的二维码。
-
-签名、Passport 参数和环境档案参考 MIT 开源项目 [yunsur/douyin-mcp](https://github.com/yunsur/douyin-mcp/tree/7e90d139007f141cb7389aa509d8e6e67f7b5840/douyin)，固定来源与许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。这是针对本项目所需接口的 TypeScript 适配，没有移植上游 TLS 指纹实现。令牌报告仍包含上游预设设备档案；动态脚本内的 DOM 由 LinkeDOM 维护，Canvas 2D 则通过 Skia 实际绘制像素、PNG 与文字。两者的指纹一致性尚未完成，不能视为完整 Chromium 或用户 Safari 的环境。支持范围及缺失项见 [环境兼容性说明](docs/environment-compatibility.md)。Worker 的出站网络与 Go 客户端不同，不能据上游的成功记录推断本项目适用于所有账号和地区。
-
-## 方案一：纯 Cloudflare（推荐）
-
-需要 Node.js 22.13+（建议 24 LTS）、一个可使用 Workers 与 D1 的 Cloudflare 账号。
-
-### 1. 安装并创建数据库
+使用 Node.js 24。以下命令从本分支部署；需要你自己的 Vercel 账号。每个客户使用独立项目、私有 Blob 与密钥，一个项目绑定一个抖音账号。
 
 ```bash
-git clone --branch feat/pure-protocol https://github.com/Tommyeth/douyin-unrecommend.git
+git clone --branch feat/vercel-chromium https://github.com/Tommyeth/douyin-unrecommend.git
 cd douyin-unrecommend
 npm ci
-npx wrangler login
-npx wrangler d1 create douyin-unrecommend
+npx vercel@65.16.0 login
+npx vercel@65.16.0 link
 ```
 
-把命令返回的 `database_id` 填入 [wrangler.jsonc](wrangler.jsonc)，替换全零占位符，然后：
+创建 **Private** Blob 并连接生产环境：
 
 ```bash
-npm run db:migrate
+npx vercel@65.16.0 blob create-store douyin-private \
+  --access private --region hnd1 --yes --environment production
 ```
 
-### 2. 设置两个独立密钥
+CLI 会把 Blob 凭证配置进项目。不要创建 public 存储，也不要把凭证提交到 Git。
 
-分别运行两次 `openssl rand -hex 32`，将结果妥善保存：
+分别用两次 `openssl rand -hex 32` 生成两个不同的密钥，再通过 CLI 输入：
 
 ```bash
-npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put AUTH_SECRET
+npx vercel@65.16.0 env add ADMIN_TOKEN production --sensitive
+npx vercel@65.16.0 env add AUTH_SECRET production --sensitive
 ```
 
-- `ADMIN_TOKEN`：进入管理页面、调用管理 API 的口令。
-- `AUTH_SECRET`：AES-GCM 登录态加密密钥。与管理员口令不同，且至少 32 个字符。
-- 更换 `AUTH_SECRET` 后需重新扫码。不要把密钥填进仓库中的 `wrangler.jsonc`。
+- `ADMIN_TOKEN`：管理页口令；只保留在页面内存中，刷新后重新输入。
+- `AUTH_SECRET`：登录态及整个状态快照的 AES-GCM 加密密钥；应妥善备份，丢失后无法解密原状态。
 
-### 3. 配置通知
-
-从 [examples/notifications.json](examples/notifications.json) 选择需要的渠道，删除不用的项，替换你自己的参数。支持同时启用多个渠道，`name` 必须唯一。
+按 [examples/notifications.json](examples/notifications.json) 选择通知渠道，把填好的 JSON 数组作为敏感环境变量保存：
 
 ```bash
-npx wrangler secret put NOTIFICATIONS_JSON
+npx vercel@65.16.0 env add NOTIFICATIONS_JSON production --sensitive
+npx vercel@65.16.0 deploy --prod
 ```
 
-粘贴整个 JSON 数组即可。不要把填写过密钥的通知配置提交到 Git。
-
-### 4. 部署并扫码
+`vercel.json` 使用新版 **Schedules**，不是旧版每天一次的 Hobby Cron Jobs。部署后检查：
 
 ```bash
-npm run deploy
+npx vercel@65.16.0 schedules list
 ```
 
-1. 打开部署返回的 `workers.dev` 或自定义域名。
-2. 输入 `ADMIN_TOKEN`。
-3. 点击「生成二维码」，用抖音 App 扫描**官方二维码**，在手机上确认登录。
-4. 页面每 6 秒检查状态，确认登录后自动加密写入 D1，也可手动点击验证。
-5. 点击「测试通知」，确认收得到消息。
-6. 选择「仅提醒」或「自动取消」，设置检测间隔，保存。
+应看到 `douyin-hourly` 为 active，表达式 `0 * * * *`，目标为私有函数 `api/hourly`。私有任务没有公开调用 URL，管理 API 另有管理员口令与同源检查。
 
-无需一直开着管理页，Cron 会继续运行。二维码会话最长 3 分钟；二维码过期后重新生成。二维码接口也要求管理员口令，响应禁止缓存。
+## 扫码与使用
 
-### Cloudflare 的实际限制
+1. 打开部署域名，输入 `ADMIN_TOKEN`。
+2. 点击「生成 / 重新生成二维码」。页面展示的是 Vercel Chromium 中的官方抖音登录画面。
+3. 用抖音 App 扫描**页面中的实时二维码**并确认，保持管理页连接。二维码可能自动刷新，不宜转发静态截图后长时间等待。
+4. 只有登录态已成功加密持久化，页面才显示登录成功。扫码连接最长约 4 分钟，断开后需要重新开始。
+5. 使用「预览本批作品」核对本人推荐；按需要切换仅提醒或自动取消。仅提醒需先配置通知渠道，使用「测试通知」检查送达。
+6. 之后无需保持网页打开，每小时任务会恢复登录态并执行，结束时关闭 Chromium。
 
-- 不产生 Browser Run 用量；费用来自 Workers 请求/CPU、D1 及对应通知服务，实际按账号计划和用量计算。不能保证免费套餐足够长期使用。
-- 动态环境脚本和签名需要 CPU。Cloudflare [运行限制](https://developers.cloudflare.com/workers/platform/limits/)规定 Free 的每次 HTTP / Cron CPU 预算为 10 ms；延长检测间隔不提高单次 CPU 预算，本项目尚未验证满足这一预算。纯 Cloudflare 不等于免费部署，长期运行需根据实例 CPU 指标选择套餐。
-- [Cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/) 每分钟唤醒一次，根据数据库中的 `next_poll` 判断是否到期；未到期不请求抖音。新 Cron 配置需要时间传播。
-- 登录轮询遇到错误码 `7` 时按 10 / 20 / 40 / 60 秒退避，并在二维码会话过期时停止。退避状态存入 D1，Worker 重启不会绕过等待。若响应明确包含验证码字段，则提示额外验证；不会把普通错误一律显示为验证码。管理员 API 的 `loginDiagnostic` 仅保存错误码及验证字段是否存在，不保存验证码凭证或链接。
-- 纯协议不等于不受平台限制。抖音可能限制数据中心出口、使签名失效或要求额外验证。遇到验证或协议错误会停止本轮操作并显示错误，不能保证完全无人值守。
-- 每轮抖音操作设有 120 秒请求中止期限。失败后退避，最多退避到一小时（配置间隔更长时尊重配置）。没有读完全部页面，不会据此判定某条记录已移除。
+取消使用官方网页环境内发起的 `familiar/recommend/cancel` 请求，由页面自己的请求环境处理签名；不是模拟点按「喜欢」，也不会重放旧签名。只允许取消本轮推荐接口实际读到的作品。取消成功需同时满足接口成功、完整推荐列表中已移除。
 
-### 免费额度与检查间隔
+## 全流程如何留在 Vercel
 
-默认一小时一次是减少调用量的配置，**不是免费套餐兼容性认证**。已有实例的管理页设置优先；升级后需在管理页将间隔保存为 `3600`，仅改环境变量不会覆盖此前保存的值。
+- **Functions**：管理 API、真实 Chromium、二维码展示、读取与取消；单次工作有执行期限。
+- **Private Blob**：保存整个加密状态快照，包括浏览器登录态、设置、去重记录与通知待发队列。SQLite 只在本次函数内存中执行查询，不依赖 `/tmp` 文件持久化。
+- **条件写与一致读**：每次从 Blob 读取最新版本，用 ETag 条件写争抢租约，避免两次检测或扫码同时操作账号；过期任务不能覆盖新任务结果。
+- **Schedules**：每小时调用私有函数，按计划时间判断下一轮，兼容免费版的调度抖动。
 
-本分支不使用 Browser Run，没有浏览器分钟数消耗。若选择带完整 Chromium 的 Cloudflare Browser Run 方案，按 [官方定价](https://developers.cloudflare.com/browser-run/pricing/)免费额度为每天 10 分钟，且账号内共享：
+通常每个检测任务写 Blob 两次：占用租约、保存结果并释放租约。异常中断后租约最长六分钟过期。临近函数执行期限时会把剩余通知留在队列，先保存本轮结果。外部通知采用至少一次投递，极端断线仍可能重复；Webhook 接收端可用 `Idempotency-Key` 去重。
 
-| 间隔    | 每天检查次数 | 每次 10 秒的估算 | 每次 20 秒的估算 |
-| ------- | ------------ | ---------------- | ---------------- |
-| 30 分钟 | 48           | 8 分钟           | 16 分钟          |
-| 1 小时  | 24           | 4 分钟           | 8 分钟           |
-| 2 小时  | 12           | 2 分钟           | 4 分钟           |
+不需要第三方数据库。抖音 App 和你选用的 Bark、企微或邮件服务仍是各自的外部服务，需要相应账号或密钥。
 
-这些是容量估算，未测得抖音真实耗时；扫码等待、分页、取消复核、失败重试和其他任务都要另计。完整浏览器在 Cloudflare 的独立浏览器服务运行，不是在普通 Worker 内运行。浏览器方案与本分支的纯协议方案不能混称。
+## 免费额度
 
-Vercel Functions 的运行条件及个人/客户部署区别见 [平台选择说明](docs/platform-options.md)。
+截至 2026-11-16，Hobby 的 [Functions](https://vercel.com/docs/functions/limitations) 在 Fluid Compute 下每次最多 300 秒，2 GB / 1 vCPU；[Schedules](https://vercel.com/docs/schedules/limits) 每周期最多执行 5000 次，固定 15 分钟调度窗口，仍为 Beta。
 
-## 方案二：服务器 / 本机
+按 31 天、每小时一次计算为 744 轮，通常约 1488 次 Blob 写入，低于 [Private Blob 的 2000 次高级操作额度](https://vercel.com/docs/vercel-blob/usage-and-pricing)。手动检测、扫码、修改设置、额外通知操作和其他项目用量另计；任务 CPU、内存时间、流量和存储各有配额，不能据此保证所有账号永久免费。
 
-### Node.js
+[Vercel Hobby](https://vercel.com/pricing) 面向个人、非商业用途；收费托管或商业客户服务应按适用套餐评估。项目不会自动开通付费计划。
 
-```bash
-npm ci
-cp .env.example .env
-# 编辑 .env：替换两个独立随机密钥，填写 NOTIFICATIONS_JSON
-npm run dev
-```
+## 参数和通知
 
-打开 `http://127.0.0.1:8787`。服务端无需桌面环境或浏览器进程。
+| 参数                    | 默认值   | 说明                                      |
+| ----------------------- | -------- | ----------------------------------------- |
+| `MODE`                  | `notify` | 管理页保存的模式优先                      |
+| `POLL_INTERVAL_SECONDS` | `3600`   | Vercel 使用 1–24 个整小时；管理页设置优先 |
+| `MAX_PAGES`             | `10`     | 每轮最多读取页数                          |
+| `MAX_ACTIONS`           | `5`      | 每轮/每批最多取消数                       |
+| `ACTION_DELAY_MS`       | `3000`   | 取消后到复核前的等待                      |
+| `PAGE_TIMEOUT_MS`       | `20000`  | 页面/接口等待上限                         |
+| `IGNORE_IDS`            | 空       | 逗号分隔的保留作品 ID，不提醒、不取消     |
+| `NOTIFICATIONS_JSON`    | `[]`     | 见通知示例；敏感变量                      |
 
-### Docker Compose
+| 通知协议       | 支持方式                                                  |
+| -------------- | --------------------------------------------------------- |
+| Bark           | 官方或自建服务，JSON POST                                 |
+| 企业微信机器人 | 群机器人 Webhook，检查业务错误码                          |
+| Webhook        | JSON POST，可附 Bearer token，携带事件 ID                 |
+| SMTP           | 隐式 TLS 465、AUTH LOGIN、UTF-8 MIME；不支持 STARTTLS 587 |
 
-```bash
-cp .env.example .env
-# 编辑 .env，密钥与通知配置同上
-docker compose up -d --build
-docker compose logs -f
-```
+事件有 `new_recommendation`、`cancelled`、`error`、`test`。队列失败后退避，在后续任务中重试；只有配置的渠道会收到消息。长期未读完全部推荐列表，不会把未看到的记录误判为已删除。
 
-数据存储在 `./data`，容器重启后仍保留。默认只监听本机 `127.0.0.1:8787`；远程访问可使用 SSH 隧道：
+## 其他部署与开发
 
-```bash
-ssh -L 8787:127.0.0.1:8787 your-server
-```
-
-或通过 HTTPS 反向代理访问。不要通过明文公网 HTTP 传输管理员口令。
-
-## 通知渠道
-
-| 类型      | 参数                                                 | 说明                                                            |
-| --------- | ---------------------------------------------------- | --------------------------------------------------------------- |
-| `bark`    | `url`、`key`                                         | JSON POST；官方示例 `https://api.day.app/push`，也支持自建 Bark |
-| `wecom`   | `url`                                                | 企业微信群机器人完整 Webhook URL，检查 `errcode`                |
-| `webhook` | `url`、可选 `token`                                  | JSON POST，可附加 `Authorization: Bearer …`                     |
-| `smtp`    | `host`、`port`、`username`、`password`、`from`、`to` | 直接 SMTP，隐式 TLS **465**，AUTH LOGIN；密码通常是邮箱授权码   |
-
-SMTP 在 Cloudflare 中使用 TCP socket，在服务器中使用 Node TLS。当前**不支持 25 或 STARTTLS 587**；Cloudflare 禁止出站 25 端口，465 仍取决于目标邮件服务的网络及认证策略。无需额外邮件中转。消息为 UTF-8 MIME，多个收件人写进 `to` 数组。
-
-通用 Webhook 请求：
-
-```json
-{
-  "id": "new:1234567890123456789:1",
-  "kind": "new_recommendation",
-  "title": "抖音发现新增推荐",
-  "body": "检测到推荐记录，可能是误触，请核对。\n作品标题",
-  "url": "https://www.douyin.com/video/1234567890123456789"
-}
-```
-
-事件类型有 `new_recommendation`、`cancelled`、`error`、`test`。`Idempotency-Key` 请求头等于事件 `id`。失败消息保存在待发队列，指数退避重试；已投递的消息按渠道独立记录，保留 30 天。投递采用**至少一次**语义，网络中断时仍可能重复；自建 Webhook 接收端应按事件 ID 去重。通知内容包含作品标题与链接，只会发往你配置的渠道。
-
-## 命令行批量操作
-
-管理页之外，也可以用脚本访问实例。`.env` 中配置 `ADMIN_TOKEN`，远程实例另加 `SERVICE_URL=https://your-worker.workers.dev`：
-
-```bash
-node --env-file=.env scripts/client.mjs status
-node --env-file=.env scripts/client.mjs poll
-node --env-file=.env scripts/client.mjs preview
-# 查看预览结果，再传入返回的 token：
-node --env-file=.env scripts/client.mjs clear <预览返回的token>
-```
-
-预览令牌 10 分钟有效且仅使用一次，只会取消预览中包含且仍存在的作品。每批最多 `MAX_ACTIONS` 条，反复预览并执行可继续清理。
-
-## 配置项
-
-| 配置                    | 默认值   | 说明                                   |
-| ----------------------- | -------- | -------------------------------------- |
-| `MODE`                  | `notify` | 首次启动默认模式；管理页保存的设置优先 |
-| `POLL_INTERVAL_SECONDS` | `3600`   | 60–86400；管理页保存的设置优先         |
-| `MAX_PAGES`             | `10`     | 单次最多读取页数，1–100                |
-| `MAX_ACTIONS`           | `5`      | 一轮/一批最多取消数量，1–50            |
-| `ACTION_DELAY_MS`       | `3000`   | 取消请求后到复核前的间隔，至少 1000    |
-| `PAGE_TIMEOUT_MS`       | `20000`  | 单个 HTTP 请求超时（保留旧配置名）     |
-| `IGNORE_IDS`            | 空       | 逗号分隔的保留作品 ID                  |
-| `NOTIFICATIONS_JSON`    | `[]`     | 通知渠道数组；仅提醒模式至少需一个渠道 |
-
-Cloudflare 的普通参数写入 `wrangler.jsonc` 的 `vars`，敏感参数使用 `wrangler secret put`。服务器使用 `.env` 或进程环境变量。
-
-## 可靠性与边界
-
-- 每个部署只管理**一个抖音账号**。账号指纹绑定到数据库，换号时拒绝操作；不同客户使用独立部署/数据库/密钥。本项目不是多租户 SaaS。
-- 数据库租约阻止 Cron、手动检测与清理同时修改账号。
-- 只读取本人推荐页，不下载视频，不取消喜欢，不修改关注/收藏。
-- 自动取消只允许处理本轮推荐接口中确认的作品，调用单向取消接口后重新读取完整列表。不能确认移除就报错停止，不把 HTTP 200 当作取消成功。
-- 网页接口和签名逻辑不是抖音开放平台承诺的稳定 API，可能变化。出现协议错误、验证要求或 `CANCEL_REJECTED` 时停止本轮操作并退避。
-- 登录态可能过期，届时通知重新扫码。Worker 重新实例化后从加密存储恢复 Cookie 与签名计数；这不保证平台永久维持登录。v0.1 的浏览器登录态不直接兼容，升级后需重新扫码，并保留原 `AUTH_SECRET` 与数据库。
-- 检测周期之间发生又撤销的推荐可能被漏过；不完整扫描时，对未看到的记录保持原状态。因此某些重新推荐的情况只能在后续完整扫描中识别。
-- `/healthz` 只表示进程可用；运行是否正常请看管理页的最近成功时间、错误和待发送数量。
-
-## 开发与验证
+原有纯协议 Worker / Node / Docker 实验版保留，部署方法见 [纯协议说明](docs/pure-protocol.md)。该模式仍未通过真实登录验收，与 Vercel Chromium 的运行证据独立。
 
 ```bash
 npm ci
+npx playwright-core install --with-deps chromium
 npm run check
 npm test
 npm run test:worker
 ```
 
-测试覆盖真实 DOM 节点与事件、Canvas 像素/PNG/路径/渐变/文字/跨画布绘制、资源超限及会话隔离，以及 SM3 / a_bogus / 指纹确定性向量、环境校验加密、QuickJS 异步与资源限制、宿主隔离、Cookie 隔离、登录跳转域名限制、分页、CSRF 取消与结果复核、未扫描作品拒绝、去重与重新推荐、账号隔离、并发锁、加密登录态恢复、四种通知协议、失败重试以及 API 鉴权。
+Vercel 本地联调：用 `vercel env pull .env.local` 获取开发环境配置，补充两个独立密钥后运行 `npm run dev:vercel`；默认监听 `127.0.0.1:8791`。开发环境应连接自己的私有 Blob；不要误用客户生产存储。
 
-`test:worker` 构建后在真实 workerd 运行时和本地 D1 中执行环境脚本 → 扫码 → 读取 → 取消 → 复核流程，上游抖音响应使用模拟数据，QuickJS 和 CanvasKit WASM 实际执行，检查真实绘制结果。测试不登录或操作真实账号，也不向真实通知渠道发送消息。构建和部署脚本会从锁定版本的 npm 依赖准备 WASM、DOM 模块和字体到忽略目录 `src/generated/`，无需另行下载二进制。
+`npm test` 包含真实 Chromium + 模拟抖音页面测试、状态并发与持久化、两种模式、协议签名和通知测试。模拟测试不会登录或操作真实账号。
 
-目录：`src/protocol/` HTTP 与签名；`src/douyin.ts` 抖音业务接口；`src/service.ts` 工作流；`src/store.ts` 持久化；`src/notify.ts` / `src/smtp.ts` 通知；`src/worker.ts` Cloudflare 入口；`src/server.ts` 服务器入口。
-
-参考：[Cloudflare TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)、[Bark](https://bark.day.app/)、[企业微信机器人](https://developer.work.weixin.qq.com/document/path/91770)。
-
-## 安全反馈
-
-请勿在公开 Issue 中附带 Cookie、登录二维码、请求签名、Webhook 密钥或完整 HAR。提交兼容性问题时，提供已去除个人信息的错误码和运行环境。所有登录态、数据库、`.env`、`.dev.vars` 与运行截图都已加入忽略列表。
-
-许可证：[MIT](LICENSE)。本项目与抖音/字节跳动无隶属关系。
+敏感数据、`.env.local`、`.vercel/`、本地数据和截图均忽略。公开反馈请只提供去除个人信息的错误分类。许可证 [MIT](LICENSE)，依赖许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目与抖音/字节跳动无隶属关系。

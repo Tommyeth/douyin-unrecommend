@@ -2,11 +2,11 @@
   "name": "douyin-unrecommend",
   "version": "0.2.0",
   "private": true,
-  "description": "抖音推荐防误触：扫码登录、定时检测、批量取消、多渠道提醒，支持纯 Cloudflare 与自托管服务器",
+  "description": "抖音推荐防误触：真实 Chromium 扫码登录、定时检查与取消、多渠道提醒，支持 Vercel 与纯协议实验版",
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "tsx --env-file=.env src/server.ts",
@@ -22,7 +22,10 @@
     "precheck": "node scripts/prepare-wasm.mjs",
     "pretest": "node scripts/prepare-wasm.mjs",
     "predev": "node scripts/prepare-wasm.mjs",
-    "prestart": "node scripts/prepare-wasm.mjs"
+    "prestart": "node scripts/prepare-wasm.mjs",
+    "build:vercel": "node scripts/build-vercel.mjs",
+    "dev:vercel": "tsx --env-file=.env.local src/vercel/local.ts",
+    "test:browser": "tsx --test tests/browser.test.ts"
   },
   "dependencies": {
     "@fontsource/arimo": "5.3.0",
@@ -30,9 +33,13 @@
     "@fontsource/tinos": "5.3.0",
     "@hono/node-server": "2.1.8",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "@sparticuz/chromium": "153.0.0",
+    "@vercel/blob": "2.9.0",
+    "@vercel/schedules": "0.0.3",
     "canvaskit-wasm": "0.42.0",
     "hono": "4.13.18",
     "linkedom": "0.18.15",
+    "playwright-core": "1.65.1",
     "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
@@ -44,5 +51,8 @@
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "wrangler": "4.162.0"
+  },
+  "overrides": {
+    "zod": "4.6.7"
   }
 }
