@@ -1,11 +1,21 @@
 const assert = require('node:assert/strict');
-const { readFile } = require('node:fs/promises');
+const { readFile, readdir } = require('node:fs/promises');
 const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
 async function main() {
   let cancelled = false;
   const token = 'a'.repeat(40);
   const upstream = async (request) => {
     const u = new URL(request.url);
+    if (u.pathname === '/passport/general/login_guiding_strategy/')
+      return Response.json({ message: 'success', data: {} });
+    if (u.pathname === '/passport/web/challenge/')
+      return Response.json({
+        message: 'success',
+        data: {
+          passportiv: 'fixture-iv',
+          template: 'module.exports={getData:async()=>({p_in:"fixture",e_in:{}})}',
+        },
+      });
     if (u.hostname === 'mssdk.bytedance.com' && u.pathname === '/web/r/token')
       return new Response('{}', { headers: { 'x-ms-token': 'fixture-ms-token' } });
     if (u.pathname === '/')
@@ -76,8 +86,12 @@ async function main() {
   };
   const mf = new Miniflare(
     convertV4MiniflareOptions({
-      modules: true,
-      scriptPath: 'dist/worker/worker.js',
+      modules: [
+        { type: 'ESModule', path: 'dist/worker/worker.js' },
+        ...(await readdir('dist/worker'))
+          .filter((file) => file.endsWith('.wasm'))
+          .map((file) => ({ type: 'CompiledWasm', path: 'dist/worker/' + file })),
+      ],
       compatibilityDate: '2026-11-15',
       compatibilityFlags: ['nodejs_compat'],
       d1Databases: { DB: 'smoke' },

@@ -5,6 +5,7 @@ import { CookieJar, Http, type Cookie } from './protocol/http.js';
 import { Passport } from './protocol/login.js';
 import { TicketGuard, type TicketState } from './protocol/ticket.js';
 import { refreshToken } from './protocol/token.js';
+import type { PassportSession } from './protocol/fingerprint.js';
 import { flush } from './notify.js';
 import { Store } from './store.js';
 import { SafeError, safeError, type MailConnect } from './types.js';
@@ -19,6 +20,7 @@ type Login = {
   retryAt?: number;
   throttles?: number;
   portrait: string;
+  sdk?: PassportSession;
   confirmed?: boolean;
 };
 type Plan = { token: string; ids: string[]; expires: number };
@@ -127,6 +129,7 @@ export class Service {
         },
         lastPoll: 0,
         portrait: passport.portrait,
+        sdk: passport.session,
       });
       return { expires };
     });
@@ -138,7 +141,7 @@ export class Service {
     return this.store.lock(async () => {
       const login = await this.loadLogin(),
         bot = this.client(login.state),
-        passport = new Passport(bot.http, login.portrait);
+        passport = new Passport(bot.http, login.portrait, login.sdk);
       passport.signer = bot.signer;
       if (!login.confirmed) {
         if (login.retryAt && Date.now() < login.retryAt)

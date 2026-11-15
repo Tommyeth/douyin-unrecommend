@@ -28,12 +28,29 @@ function fixture(
   const writes: string[] = [];
   let validSession = false;
   let portrait = '';
+  let sourceInfo = '';
   const transport: typeof fetch = async (input, init) => {
     const u = new URL(String(input)),
       headers = new Headers(init?.headers),
       method = init?.method || 'GET';
     if (u.hostname === 'mssdk.bytedance.com' && u.pathname === '/web/r/token')
       return new Response('{}', { headers: { 'x-ms-token': 'fixture-ms-token' } });
+    if (u.pathname === '/passport/general/login_guiding_strategy/')
+      return Response.json({ message: 'success', data: {} });
+    if (u.pathname === '/passport/web/challenge/') {
+      assert.equal(method, 'POST');
+      assert.equal(u.searchParams.get('aid'), '6383');
+      assert.equal(u.searchParams.get('skip_c'), '1');
+      assert.ok(u.searchParams.get('a_bogus'));
+      assert.ok(new URLSearchParams(String(init?.body)).get('sign'));
+      return Response.json({
+        message: 'success',
+        data: {
+          passportiv: 'fixture-iv',
+          template: 'module.exports={getData:async()=>({p_in:"fixture",e_in:{}})}',
+        },
+      });
+    }
     if (u.pathname === '/')
       return new Response('', {
         headers: {
@@ -69,6 +86,9 @@ function fixture(
     }
     if (u.pathname === '/passport/web/get_qrcode/') {
       assert.match(headers.get('Cookie') || '', /bd_ticket_guard_client_data_v2=/);
+      for (const name of ['bit_env', 'gulu_source_res', 'fpk1', 'fpk2', 'sdk_source_info'])
+        assert.ok(headers.get('Cookie')?.includes(name + '='));
+      sourceInfo = u.searchParams.get('account_sdk_source_info')!;
       portrait = headers.get('x-tt-passport-verify-portrait')!;
       assert.ok(portrait.endsWith('.login'));
       assert.ok(u.searchParams.get('sign'));
@@ -81,6 +101,7 @@ function fixture(
     if (u.pathname === '/passport/web/check_qrconnect/') {
       assert.match(headers.get('Cookie') || '', /bd_ticket_guard_client_data_v2=/);
       assert.equal(headers.get('x-tt-passport-verify-portrait'), portrait);
+      assert.equal(u.searchParams.get('account_sdk_source_info'), sourceInfo);
       assert.equal(new URLSearchParams(String(init?.body)).get('token'), 'test-token');
       assert.ok(headers.get('Cookie')?.includes('passport_csrf_token=anonymous'));
       return Response.json({

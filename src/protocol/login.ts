@@ -3,6 +3,15 @@ import { SafeError } from '../types.js';
 import { Http } from './http.js';
 import { TicketGuard } from './ticket.js';
 import { refreshToken } from './token.js';
+import {
+  pageCookies,
+  passportSession,
+  sourceCookie,
+  challengeBody,
+  bitEnvironment,
+  type PassportSession,
+} from './fingerprint.js';
+import { runChallenge } from './challenge-vm.js';
 import { Signer, passportEncode, passportSign, aidSign } from './sign.js';
 const hex = (n: number) =>
   Array.from(crypto.getRandomValues(new Uint8Array(n)), (x) =>
@@ -37,6 +46,7 @@ export class Passport {
   constructor(
     public http: Http,
     public portrait = crypto.randomUUID() + '.login',
+    public session: PassportSession = passportSession(),
   ) {}
   async sdk(extra: Record<string, string>, body: Record<string, string> = {}, fp = false) {
     const date = new Date();
@@ -63,15 +73,7 @@ export class Passport {
     }
     Object.assign(query, {
       account_sdk_source: 'web',
-      account_sdk_source_info: passportEncode(
-        JSON.stringify({
-          hardwareConcurrency: 8,
-          innerHeight: 855,
-          innerWidth: 1920,
-          outerHeight: 1032,
-          outerWidth: 1920,
-        }),
-      ),
+      account_sdk_source_info: this.session.sourceInfo,
       p_js_v: '3.4.4',
       p_js_t: 'pro',
       p_zt: '3.3.17',
@@ -161,6 +163,7 @@ export class Passport {
       's_v_web_id',
       'verify_' + Date.now().toString(36) + '_' + crypto.randomUUID().replaceAll('-', '_'),
     );
+    pageCookies(this.http.jar, this.session);
     const registered = await this.http.json('https://ttwid.bytedance.com/ttwid/union/register/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -189,7 +192,26 @@ export class Passport {
         throw new SafeError('LOGIN_DEVICE', '抖音匿名设备校验失败，未生成二维码。');
     }
     await refreshToken(this.http);
+    await this.call('/passport/general/login_guiding_strategy/', {}, undefined, 'www.douyin.com');
     await this.ticketBootstrap();
+    const challenge = await this.call(
+      '/passport/web/challenge/',
+      { skip_c: '1' },
+      await challengeBody(),
+      'login.douyin.com',
+    );
+    if (
+      typeof challenge.data?.passportiv !== 'string' ||
+      typeof challenge.data?.template !== 'string'
+    )
+      throw new SafeError('LOGIN_CHALLENGE', '登录环境校验响应不完整，未生成二维码。');
+    this.http.jar.set('bit_env', await bitEnvironment(challenge.data.passportiv));
+    const result = await runChallenge(challenge.data.template);
+    this.http.jar.set(
+      'gulu_source_res',
+      Buffer.from(JSON.stringify({ p_in: result.p_in })).toString('base64'),
+    );
+    this.http.jar.set('sdk_source_info', sourceCookie(this.session, result.e_in));
   }
   async ticketBootstrap() {
     const request = async (path: string, body: string, csrf = 'DOWNGRADE') => {
