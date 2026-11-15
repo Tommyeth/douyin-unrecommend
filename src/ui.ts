@@ -13,13 +13,13 @@ export function renderHtml(browser = false) {
 <section><h2>批量取消推荐</h2><p>先预览本次将处理的作品，再确认取消。保留列表中的作品会自动跳过，每批数量受 MAX_ACTIONS 限制。</p><button id="preview" class="secondary">预览本批作品</button><button id="clear" class="danger" hidden>确认取消本批推荐</button><ul id="results"></ul></section>
 </main><p id="message" role="status"></p><footer>检测结果只能表示新增推荐，不能判断是否误触。抖音页面或接口变化时，任务会停止相关操作并提示处理。</footer>
 <script>
-let token='',plan='',timer=null,imageUrl='',loginAbort=null;const browserRuntime=${browser};
+let token='',plan='',timer=null,imageUrl='',loginAbort=null,cancelling=false;const browserRuntime=${browser};
 const $=id=>document.getElementById(id);const message=text=>$('message').textContent=text;
 async function api(path,method='GET',body){const r=await fetch('/api/'+path,{method,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(!r.ok){const e=await r.json();throw Error(e.message||e.error)}return r;}
 async function status(){const s=await(await api('status')).json();$('modeSelect').value=s.mode;$('seconds').value=s.interval;$('logged').textContent=s.loggedIn?'已保存登录态':'待扫码';$('interval').textContent=s.interval+' 秒';$('mode').textContent=s.mode==='notify'?'仅提醒':'自动取消';$('statusText').textContent='通知渠道：'+(s.channels.join('、')||'未配置')+'；待发送：'+s.pending+'。'+(s.lastScan?' 最近检测 '+new Date(s.lastScan.at).toLocaleString()+'，发现 '+s.lastScan.count+' 条'+(s.lastScan.complete?'（完整扫描）。':'（未读完，请留意扫描上限）。'):'')+(s.error?' 错误：'+s.error.message:'');}
 async function image(){const r=await api('login/image');const blob=await r.blob();if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(blob);$('qr').src=imageUrl;$('qr').hidden=false;}
 function stopImages(){if(timer)clearInterval(timer);timer=null;}
-async function run(button,action){button.disabled=true;try{await action()}catch(e){message(e.message)}finally{button.disabled=false;}}
+async function run(button,action){button.disabled=true;try{await action()}catch(e){message(e.message)}finally{button.disabled=button===$('login')&&cancelling;}}
 $('enter').onclick=()=>run($('enter'),async()=>{token=$('token').value;await status();$('token').value='';$('unlock').hidden=true;$('main').hidden=false;message('已连接。');});
 $('refresh').onclick=()=>run($('refresh'),status);
 $('saveSettings').onclick=()=>run($('saveSettings'),async()=>{await api('settings','POST',{mode:$('modeSelect').value,interval:Number($('seconds').value)});await status();message('已保存，将在下一次调度时生效。');});
@@ -36,7 +36,7 @@ if(!confirmed)throw Error('扫码连接已结束，请重新生成二维码。')
 }finally{await reader.cancel().catch(()=>{});}
 }catch(e){if(loginAbort.signal.aborted)message('已取消扫码。');else throw e;}finally{loginAbort=null;$('qr').hidden=true;if(imageUrl){URL.revokeObjectURL(imageUrl);imageUrl='';}}
 });
-$('finish').onclick=()=>{loginAbort?.abort();$('qr').hidden=true;message('已取消扫码。')};
+$('finish').onclick=()=>run($('finish'),async()=>{cancelling=true;$('login').disabled=true;loginAbort?.abort();$('qr').hidden=true;try{await api('login/cancel','POST');message('正在结束云端扫码会话…');for(let i=0;i<10;i++){const s=await(await api('status')).json();if(!s.busy){message('已取消扫码。');return}await new Promise(r=>setTimeout(r,1000))}message('取消请求已保存，云端会话正在关闭，请稍后重新生成。')}finally{cancelling=false;$('login').disabled=false;}});
 }else{
 $('login').onclick=()=>run($('login'),async()=>{stopImages();message('正在通过协议获取二维码…');const j=await(await api('login/start','POST')).json();await image();$('loginHint').hidden=false;let updating=false;timer=setInterval(async()=>{if(Date.now()>j.expires){stopImages();message('二维码已过期，请重新生成。');return}if(updating)return;updating=true;try{await finishLogin()}catch(e){stopImages();message(e.message)}finally{updating=false}},6000);message('请用抖音 App 扫码并确认。');});
 $('finish').onclick=()=>run($('finish'),finishLogin);

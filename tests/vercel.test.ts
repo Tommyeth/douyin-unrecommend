@@ -5,6 +5,7 @@ import {
   changeState,
   readState,
   emptyState,
+  requestLoginCancel,
   type State,
   type StateBackend,
 } from '../src/vercel/state.js';
@@ -73,6 +74,26 @@ test('状态保存使用条件写，过期任务不能覆盖新任务的结果',
     /冲突/,
   );
   assert.equal(await readState(b, (s) => s.get('x')), 'new');
+});
+test('取消标记与扫码保存竞争时保留原登录态，不能覆盖普通任务', async () => {
+  const b = backend();
+  await changeState(b, async (s) => {
+    await s.set('auth', 'previous');
+    assert.deepEqual(await requestLoginCancel(b), { cancelled: false });
+  });
+  await assert.rejects(
+    changeState(
+      b,
+      async (s) => {
+        await s.set('auth', 'cancelled-new-session');
+        assert.deepEqual(await requestLoginCancel(b), { cancelled: true });
+      },
+      'login',
+    ),
+    /已取消扫码/,
+  );
+  assert.equal(await readState(b, (s) => s.get('auth')), 'previous');
+  assert.equal(await readState(b, async (_s, busy) => busy), false);
 });
 test('未登录的定时调度只读，不启动 Chromium 或消耗 Blob 写入', async () => {
   const b = backend();
@@ -319,6 +340,42 @@ test('关闭扫码流会关闭 Chromium 并释放持久化租约', async () => {
     }
     assert.equal(browser.isConnected(), false);
     assert.equal(await readState(b, (s) => s.get('auth')), null);
+  } finally {
+    await browser.close();
+  }
+});
+test('独立取消请求无需断开原连接即可关闭 Chromium 并释放租约', async () => {
+  const b = backend();
+  const browser = await loginBrowser(false);
+  const api = vercelApp(env, b, async () => browser);
+  try {
+    const response = await api.request('/api/login/stream', loginRequest);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let content = '';
+    while (!content.includes('"type":"image"')) {
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
+      content += decoder.decode(value);
+    }
+    const cancelled = await api.request('/api/login/cancel', loginRequest);
+    assert.deepEqual(await cancelled.json(), { cancelled: true });
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      content += decoder.decode(value);
+    }
+    const events = content
+      .trim()
+      .split('\n')
+      .map((x) => JSON.parse(x));
+    assert.equal(events.at(-1).code, 'LOGIN_CANCELLED');
+    assert.equal(
+      events.some((e) => e.type === 'confirmed'),
+      false,
+    );
+    assert.equal(await readState(b, async (_s, busy) => busy), false);
+    assert.equal(browser.isConnected(), false);
   } finally {
     await browser.close();
   }

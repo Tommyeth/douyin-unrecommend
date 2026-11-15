@@ -6,7 +6,13 @@ import { SafeError, safeError } from '../types.js';
 import { BrowserService } from '../browser/service.js';
 import type { LaunchBrowser } from '../browser/launch.js';
 import { renderHtml } from '../ui.js';
-import { blobBackend, changeState, readState, type StateBackend } from './state.js';
+import {
+  blobBackend,
+  changeState,
+  readState,
+  requestLoginCancel,
+  type StateBackend,
+} from './state.js';
 
 export function vercelApp(
   env: Record<string, unknown> = process.env,
@@ -66,6 +72,7 @@ export function vercelApp(
     return c.json(await change((s) => s.clear(token)));
   });
   api.post('/api/notifications/test', async (c) => c.json(await change((s) => s.testNotify())));
+  api.post('/api/login/cancel', async (c) => c.json(await requestLoginCancel(backend!)));
   api.post('/api/login/stream', (c) => {
     const controller = new AbortController();
     const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
@@ -78,7 +85,11 @@ export function vercelApp(
         };
         emit({ type: 'waiting' });
         try {
-          await change((s) => s.login(signal, emit));
+          await changeState(
+            backend!,
+            (store, control) => service(store).login(signal, emit, control.cancelled),
+            'login',
+          );
           emit({ type: 'confirmed' });
         } catch (e) {
           const error = safeError(e);

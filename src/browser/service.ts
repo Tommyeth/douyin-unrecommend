@@ -49,7 +49,11 @@ export class BrowserService extends Workflow {
     );
     return context;
   }
-  async login(signal: AbortSignal, emit: (event: LoginEvent) => void) {
+  async login(
+    signal: AbortSignal,
+    emit: (event: LoginEvent) => void,
+    cancelled: () => Promise<boolean> = async () => false,
+  ) {
     let browser: Browser | undefined;
     let phase = 'browser_start';
     let timedOut = false;
@@ -74,6 +78,7 @@ export class BrowserService extends Workflow {
       let refreshedAfterSession = false;
       let screenshotFailures = 0;
       while (Date.now() < expires && !signal.aborted) {
+        if (await cancelled()) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
         phase = 'login_identity';
         let account: string | undefined;
         try {

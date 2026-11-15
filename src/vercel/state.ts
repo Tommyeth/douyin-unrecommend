@@ -11,7 +11,12 @@ export type State = {
   version: 1;
   revision: string;
   rows: Rows;
-  lease: null | { owner: string; expires: number };
+  lease: null | {
+    owner: string;
+    expires: number;
+    kind?: 'operation' | 'login';
+    cancelled?: boolean;
+  };
 };
 export interface StateBackend {
   read(): Promise<{ state: State; etag: string | null }>;
@@ -123,13 +128,27 @@ export async function readState<T>(
     db.close();
   }
 }
-export async function changeState<T>(backend: StateBackend, fn: (store: Store) => Promise<T>) {
+export async function requestLoginCancel(backend: StateBackend) {
+  const { state, etag } = await backend.read();
+  if (!state.lease || state.lease.kind !== 'login' || state.lease.expires <= Date.now())
+    return { cancelled: false };
+  if (!state.lease.cancelled) {
+    state.lease.cancelled = true;
+    await backend.write(state, etag);
+  }
+  return { cancelled: true };
+}
+export async function changeState<T>(
+  backend: StateBackend,
+  fn: (store: Store, control: { cancelled: () => Promise<boolean> }) => Promise<T>,
+  kind: 'operation' | 'login' = 'operation',
+) {
   const { state, etag } = await backend.read();
   if (state.lease && state.lease.expires > Date.now())
     throw new SafeError('BUSY', '已有检测或扫码任务正在运行。', 409);
   const db = memory(state.rows);
   const owner = crypto.randomUUID();
-  state.lease = { owner, expires: Date.now() + 360000 };
+  state.lease = { owner, expires: Date.now() + 360000, kind };
   let claimed: string;
   try {
     claimed = await backend.write(state, etag);
@@ -138,11 +157,29 @@ export async function changeState<T>(backend: StateBackend, fn: (store: Store) =
     throw e;
   }
   try {
-    return await fn(db.store);
+    return await fn(db.store, {
+      cancelled: async () => {
+        const current = await backend.read();
+        return current.state.lease?.owner !== owner || !!current.state.lease.cancelled;
+      },
+    });
   } finally {
     try {
       // CAS also prevents an expired task from overwriting the next lease holder.
-      await backend.write({ ...state, rows: db.rows(), lease: null }, claimed);
+      try {
+        await backend.write({ ...state, rows: db.rows(), lease: null }, claimed);
+      } catch (error) {
+        if (kind === 'login') {
+          const current = await backend.read();
+          if (current.state.lease?.owner === owner && current.state.lease.cancelled) {
+            // A separate HTTP request can cancel even if Vercel keeps the stream connected.
+            // Preserve the previous account state instead of committing the cancelled login.
+            await backend.write({ ...current.state, lease: null }, current.etag);
+            throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
+          }
+        }
+        throw error;
+      }
     } finally {
       db.close();
     }
