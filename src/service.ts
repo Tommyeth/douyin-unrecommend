@@ -1,25 +1,29 @@
-import type { Browser, BrowserContext } from 'playwright';
 import { requireChannels, type Config } from './config.js';
 import { seal, unseal } from './crypto.js';
-import { Douyin, HOME, identity, prepareLogin } from './douyin.js';
+import { Douyin } from './douyin.js';
+import { CookieJar, Http, type Cookie } from './protocol/http.js';
+import { Passport } from './protocol/login.js';
 import { flush } from './notify.js';
 import { Store } from './store.js';
-import {
-  SafeError,
-  safeError,
-  type Browsers,
-  type MailConnect,
-  type StorageState,
-} from './types.js';
+import { SafeError, safeError, type MailConnect } from './types.js';
 
-type Login = { id: string; expires: number };
+type State = { version: 1; cookies: Cookie[]; counter?: number };
+type Login = {
+  expires: number;
+  token: string;
+  image: string;
+  state: State;
+  lastPoll: number;
+  portrait: string;
+  confirmed?: boolean;
+};
 type Plan = { token: string; ids: string[]; expires: number };
 export class Service {
   constructor(
     public cfg: Config,
     public store: Store,
-    public browsers: Browsers,
     public mail: MailConnect,
+    public transport: typeof fetch = fetch,
   ) {}
   channels() {
     return this.cfg.channels.map((c) => c.name);
@@ -52,136 +56,135 @@ export class Service {
     });
   }
   async closeLogin() {
-    const saved = await this.store.get('login');
-    if (saved) {
-      try {
-        await (await this.browsers.connect((JSON.parse(saved) as Login).id)).close();
-      } catch {
-        /* expired */
-      }
-      await this.store.delete('login');
+    await this.store.delete('login');
+  }
+  client(state: State, signal?: AbortSignal) {
+    if (state.version !== 1 || !Array.isArray(state.cookies))
+      throw new SafeError('LOGIN_REQUIRED', '登录态版本已更新，请重新扫码。');
+    const bot = new Douyin(
+      new Http(new CookieJar(state.cookies), this.transport, this.cfg.timeout, signal),
+      this.cfg,
+    );
+    bot.signer.counter = state.counter ?? 2;
+    return bot;
+  }
+  state(bot: Douyin): State {
+    return { version: 1, cookies: bot.http.jar.cookies, counter: bot.signer.counter };
+  }
+  async saveLogin(login: Login) {
+    await this.store.set(
+      'login',
+      JSON.stringify({ expires: login.expires, sealed: await seal(login, this.cfg.authSecret) }),
+    );
+  }
+  async loadLogin(): Promise<Login> {
+    const raw = await this.store.get('login');
+    const meta = raw ? JSON.parse(raw) : null;
+    if (!meta || meta.expires < Date.now() || !meta.sealed) {
+      await this.closeLogin();
+      throw new SafeError('LOGIN_EXPIRED', '二维码会话已过期，请重新生成。');
+    }
+    try {
+      return await unseal<Login>(meta.sealed, this.cfg.authSecret);
+    } catch {
+      throw new SafeError('LOGIN_EXPIRED', '二维码会话无法恢复，请重新生成。');
     }
   }
   async startLogin() {
     return this.store.lock(async () => {
       await this.closeLogin();
-      const { browser, id } = await this.browsers.launch(true);
-      try {
-        const context = await browser.newContext({
-          viewport: { width: 1100, height: 800 },
-          locale: 'zh-CN',
-        });
-        await prepareLogin(context);
-        await this.store.set('login', JSON.stringify({ id, expires: Date.now() + 180000 }));
-        return { expires: Date.now() + 180000 };
-      } catch (error) {
-        await browser.close();
-        throw error;
-      } finally {
-        await this.browsers.detach(browser);
-      }
+      const http = new Http(new CookieJar(), this.transport, this.cfg.timeout),
+        passport = new Passport(http);
+      const j = await passport.start(),
+        d = j.data;
+      if (!d || typeof d.token !== 'string' || typeof d.qrcode !== 'string')
+        throw new SafeError('LOGIN_SCHEMA', '登录接口未返回二维码和会话 token。');
+      const image = d.qrcode.replace(/^data:image\/png;base64,/, ''),
+        png = Buffer.from(image, 'base64');
+      if (png.length > 200000 || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a')
+        throw new SafeError('LOGIN_SCHEMA', '登录接口返回的二维码格式无效。');
+      const ttl = Number(d.expire_time);
+      const expires = Date.now() + Math.min(180, ttl > 0 && ttl <= 180 ? ttl : 120) * 1000;
+      await this.saveLogin({
+        expires,
+        token: d.token,
+        image,
+        state: { version: 1, cookies: http.jar.cookies, counter: passport.signer.counter },
+        lastPoll: 0,
+        portrait: passport.portrait,
+      });
+      return { expires };
     });
-  }
-  async loginBrowser() {
-    const raw = await this.store.get('login');
-    if (!raw || (JSON.parse(raw) as Login).expires < Date.now()) {
-      await this.closeLogin();
-      throw new SafeError('LOGIN_EXPIRED', '二维码会话已过期，请重新生成。');
-    }
-    try {
-      return await this.browsers.connect((JSON.parse(raw) as Login).id);
-    } catch {
-      await this.store.delete('login');
-      throw new SafeError('LOGIN_EXPIRED', '浏览器会话已断开，请重新生成二维码。');
-    }
   }
   async loginImage() {
-    return this.store.lock(async () => {
-      const browser = await this.loginBrowser();
-      try {
-        const page = browser
-          .contexts()
-          .flatMap((c) => c.pages())
-          .find((p) => p.url().includes('douyin.com'));
-        if (!page) throw new SafeError('LOGIN_EXPIRED', '未找到登录页面，请重新生成二维码。');
-        return await page.screenshot({ type: 'png' });
-      } finally {
-        await this.browsers.detach(browser);
-      }
-    });
+    return this.store.lock(async () => Buffer.from((await this.loadLogin()).image, 'base64'));
   }
   async finishLogin() {
     return this.store.lock(async () => {
-      const browser = await this.loginBrowser();
-      try {
-        const page = browser
-          .contexts()
-          .flatMap((c) => c.pages())
-          .find((p) => p.url().includes('douyin.com'));
-        if (!page) throw new SafeError('LOGIN_EXPIRED', '请重新生成二维码。');
-        await page.goto(HOME, { waitUntil: 'domcontentloaded', timeout: this.cfg.timeout });
-        const account = await identity(page);
-        const bound = await this.store.get('account');
-        if (bound && bound !== account)
-          throw new SafeError(
-            'ACCOUNT_CHANGED',
-            '请使用此前绑定的抖音账号扫码；更换账号请使用独立数据库。',
-          );
-        await this.store.set(
-          'auth',
-          await seal(await page.context().storageState({ indexedDB: true }), this.cfg.authSecret),
-        );
-        await this.store.set('account', account);
-        await this.store.delete('error');
-        await this.store.delete('next_poll');
-        await browser.close();
-        await this.store.delete('login');
-        return { ok: true };
-      } finally {
-        await this.browsers.detach(browser);
+      const login = await this.loadLogin(),
+        bot = this.client(login.state),
+        passport = new Passport(bot.http, login.portrait);
+      passport.signer = bot.signer;
+      if (!login.confirmed) {
+        if (Date.now() - login.lastPoll < 5500) return { ok: false, status: 'waiting' };
+        login.lastPoll = Date.now();
+        await this.saveLogin(login);
+        let j;
+        try {
+          j = await passport.poll(login.token);
+        } finally {
+          login.state = this.state(bot);
+          await this.saveLogin(login);
+        }
+        const status = String(j.data?.status);
+        if (status === 'expired' || status === '5') {
+          await this.closeLogin();
+          throw new SafeError('LOGIN_EXPIRED', '二维码已过期，请重新生成。');
+        }
+        if (!['confirmed', '3'].includes(status)) {
+          if (!['new', '1', 'scanned', '2'].includes(status))
+            throw new SafeError('LOGIN_SCHEMA', '无法识别扫码状态。');
+          return { ok: false, status: ['scanned', '2'].includes(status) ? 'scanned' : 'waiting' };
+        }
+        if (typeof j.data?.redirect_url !== 'string')
+          throw new SafeError('LOGIN_SCHEMA', '扫码确认后缺少登录跳转地址。');
+        await bot.http.redirects(j.data.redirect_url);
+        login.confirmed = true;
+        login.state = this.state(bot);
+        await this.saveLogin(login);
       }
+      const { account } = await bot.identity(),
+        bound = await this.store.get('account');
+      if (bound && bound !== account)
+        throw new SafeError(
+          'ACCOUNT_CHANGED',
+          '请使用此前绑定的抖音账号扫码；更换账号请使用独立数据库。',
+        );
+      await this.store.set('auth', await seal(this.state(bot), this.cfg.authSecret));
+      await this.store.set('account', account);
+      await this.store.delete('error');
+      await this.store.delete('next_poll');
+      await this.closeLogin();
+      return { ok: true, status: 'confirmed' };
     });
   }
-  async withBrowser<T>(fn: (douyin: Douyin, context: BrowserContext) => Promise<T>): Promise<T> {
+  async withClient<T>(fn: (bot: Douyin) => Promise<T>): Promise<T> {
     const raw = await this.store.get('auth');
     if (!raw) throw new SafeError('LOGIN_REQUIRED', '请先扫码登录。');
-    let state: StorageState;
+    let state: State;
     try {
-      state = await unseal<StorageState>(raw, this.cfg.authSecret);
+      state = await unseal<State>(raw, this.cfg.authSecret);
     } catch {
       throw new SafeError('AUTH_DECRYPT', '登录态无法解密，请检查 AUTH_SECRET 或重新扫码登录。');
     }
-    const { browser } = await this.browsers.launch();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController(),
+      bot = this.client(state, controller.signal),
+      timer = setTimeout(() => controller.abort(), 120000);
     try {
-      return await Promise.race([
-        (async () => {
-          const context = await browser.newContext({
-            storageState: state,
-            viewport: { width: 1100, height: 800 },
-            locale: 'zh-CN',
-          });
-          // 降低后台带宽：保留页面脚本、接口和图片，禁止视频资源自动下载。
-          await context.route('**/*', (route) =>
-            route.request().resourceType() === 'media' ? route.abort() : route.continue(),
-          );
-          const result = await fn(new Douyin(await context.newPage(), this.cfg), context);
-          await this.store.set(
-            'auth',
-            await seal(await context.storageState({ indexedDB: true }), this.cfg.authSecret),
-          );
-          return result;
-        })(),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new SafeError('RUN_TIMEOUT', '本轮达到 120 秒上限，下轮继续处理。')),
-            120000,
-          );
-        }),
-      ]);
+      return await fn(bot);
     } finally {
       clearTimeout(timer);
-      await browser.close().catch(() => {});
+      await this.store.set('auth', await seal(this.state(bot), this.cfg.authSecret));
     }
   }
   async poll(scheduled = false) {
@@ -205,7 +208,7 @@ export class Service {
       let error: SafeError | undefined;
       let result: Record<string, unknown> = {};
       try {
-        result = await this.withBrowser(async (bot) => {
+        result = await this.withClient(async (bot) => {
           let snapshot = await bot.scan();
           const added = await this.store.observe(snapshot, this.channels(), this.cfg.ignoreIds);
           let removed = 0;
@@ -259,7 +262,7 @@ export class Service {
   }
   async preview() {
     return this.store.lock(() =>
-      this.withBrowser(async (bot) => {
+      this.withClient(async (bot) => {
         const snapshot = await bot.scan();
         const account = await this.store.get('account');
         if (snapshot.account !== account) throw new SafeError('ACCOUNT_CHANGED', '账号不匹配。');
@@ -283,7 +286,7 @@ export class Service {
       if (!plan || plan.token !== token || plan.expires < Date.now())
         throw new SafeError('PLAN_EXPIRED', '预览已过期，请重新预览。');
       await this.store.delete('plan'); // 一次性令牌，断线后不自动重复执行。
-      return this.withBrowser(async (bot) => {
+      return this.withClient(async (bot) => {
         const snapshot = await bot.scan();
         await this.store.observe(snapshot, this.channels(), this.cfg.ignoreIds);
         const candidates = snapshot.videos.filter(

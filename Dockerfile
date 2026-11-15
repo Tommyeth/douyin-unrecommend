@@ -1,8 +1,7 @@
 FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci && npx playwright install --with-deps chromium
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY migrations ./migrations

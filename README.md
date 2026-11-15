@@ -4,16 +4,14 @@
 
 **纯 Cloudflare 部署，无需自备服务器；也可在普通服务器或 Docker 中运行。中文界面、中文文档，MIT 开源。**
 
-![管理页面，两种模式可切换](docs/dashboard.jpg)
-
-> v0.1 已在真实 Chrome 中完成单条推荐 → 协议取消 → 刷新确认列表为空的验证：取消接口返回 `status_code: 0`，页面自动生成新的签名。也已验证官方二维码页面加载和模式切换。**真实多页列表、扫码后的登录态恢复及 Cloudflare 出口网络尚未端到端验证**；自动化测试使用模拟页面与接口。部署后请先用「仅提醒」模式，再用一条记录验收取消功能。
+> v0.2 正在验证纯协议实现：Node 和 Cloudflare Worker 已通过真实请求取得官方登录二维码；扫码后登录、真实推荐读取及取消的联调尚在进行。单元测试和 workerd + D1 集成测试使用模拟抖音响应，不能替代真实账号验证。请勿把当前版本视为已验证可长期运行。
 
 ## 两种工作模式
 
-| 模式 | 行为 | 适用场景 |
-| --- | --- | --- |
-| 仅提醒 `notify`（默认） | 发现新增推荐，发送消息，保留推荐记录 | 希望自己判断是否误触 |
-| 自动取消 `auto_cancel` | 每轮发现推荐就尝试取消，并通过推荐列表接口复核 | 希望清除已有及以后误触的推荐 |
+| 模式                    | 行为                                           | 适用场景                     |
+| ----------------------- | ---------------------------------------------- | ---------------------------- |
+| 仅提醒 `notify`（默认） | 发现新增推荐，发送消息，保留推荐记录           | 希望自己判断是否误触         |
+| 自动取消 `auto_cancel`  | 每轮发现推荐就尝试取消，并通过推荐列表接口复核 | 希望清除已有及以后误触的推荐 |
 
 - 管理页面可以切换模式和检测间隔，设置保存在数据库，重启不丢失。
 - 默认每 **300 秒**检测，最少 **60 秒**。这是轮询，不能监听手机点击瞬间；“立即取消”指检测到之后立即处理。调度对齐、网络耗时、失败退避和单批上限会增加延迟。
@@ -22,38 +20,37 @@
 - “新增推荐”不等于“误触”，程序不推断用户意图。
 - 另有**批量清理**：预览本批 → 确认取消 → 逐条核实。它不受当前工作模式影响。
 
-## 部署架构
+## 纯协议架构
 
 ```mermaid
 flowchart LR
-  A[管理页：扫码 / 模式 / 批量清理] --> W[Cloudflare Worker]
+  A[管理页：展示二维码 / 模式 / 批量清理] --> W[Cloudflare Worker]
   C[Cron 每分钟调度] --> W
-  W --> D[(D1：加密登录态 / 去重 / 待发队列)]
-  W --> B[Browser Run：抖音官方网页]
-  B --> R[推荐列表接口]
+  W --> D[(D1：加密会话 / 去重 / 待发队列)]
+  W --> P[TypeScript：Cookie / Passport / a_bogus / CSRF]
+  P --> R[抖音 HTTP 接口]
   W --> N[Bark / 企业微信 / Webhook / SMTP]
 ```
 
-纯 Cloudflare 使用 Workers + Browser Run（原 Browser Rendering）+ D1，不依赖 VPS、外置签名服务或通知中转服务器。服务器版本使用同一套业务逻辑，换成本地 Chromium 和 SQLite。
+后端只使用 HTTP、Web Crypto、D1 和 SMTP TCP socket。**不安装 Playwright、Chromium，不绑定 Cloudflare Browser Run，也不调用外置签名服务。** 服务器版本使用相同协议代码，存储换成 SQLite。管理页只展示官方接口返回的二维码，扫码确认仍需用户在抖音 App 中完成。
 
-**不是只用 Cookie 的纯 HTTP 爬虫。** 请求包含页面动态生成的签名，程序让官方网页发起请求，再读取对应的 JSON 响应。每轮会打开个人推荐页，必要时滚动翻页，因此会消耗浏览器运行时长。
+协议路径：
 
-当前确认的接口：
+| 步骤         | 接口 / 实现                                                     |
+| ------------ | --------------------------------------------------------------- |
+| 生成二维码   | `GET /passport/web/get_qrcode/`                                 |
+| 检查扫码状态 | `POST /passport/web/check_qrconnect/`，跟随受限域名内的登录跳转 |
+| 确认本人账号 | `GET /aweme/v1/web/user/profile/self/`                          |
+| 读取推荐     | `GET /aweme/v1/web/familiar/recommend/feed/`，按游标分页        |
+| 取消推荐     | `POST /aweme/v1/web/familiar/recommend/cancel`                  |
 
-```text
-GET /aweme/v1/web/familiar/recommend/feed/
-POST /aweme/v1/web/familiar/recommend/cancel
-```
+签名由本地 TypeScript 生成；Cookie 按域名、路径和有效期管理。取消前获取 CSRF 凭证，表单为 `item_id=<作品ID>&source=0&type=2`；成功后重新读取完整推荐列表，确认该作品消失才记录成功。不会把「喜欢」接口当成推荐接口，也不会重放旧签名。
 
-只接受 `status_code=0`、合法的 `has_more`、`aweme_list` 和字符串作品 ID。推荐页可能预加载「喜欢」接口 `/aweme/v1/web/aweme/favorite/`，本工具不会将其计入推荐。
-
-**取消使用协议请求，不依赖按钮选择器。** 在已登录的抖音页面内执行 `fetch`，表单为 `item_id=<作品ID>&source=0&type=2`；抖音页面的请求拦截器补充 `a_bogus`、`msToken` 和 CSRF 信息。设备参数从本轮列表请求提取，旧签名不重放。请求成功后重新读取完整列表，确认作品已消失才记录为取消成功。首屏没有发出列表请求时，切换个人页标签触发实时请求。
-
-因此这是「浏览器维持会话和签名 + 协议取消」，还不是完全去掉浏览器的纯 HTTP 客户端。暂未实现独立签名算法，也不要求手工复制 Cookie 或请求签名。
+签名和 Passport 参数参考 MIT 开源项目 [yunsur/douyin-mcp](https://github.com/yunsur/douyin-mcp/tree/7e90d139007f141cb7389aa509d8e6e67f7b5840/douyin)，固定来源与许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。这是针对本项目所需接口的 TypeScript 适配，并未移植上游全部登录引导、设备凭证或 TLS 指纹实现。Worker 的出站网络与 Go 客户端不同，不能据上游的成功记录推断本项目适用于所有账号和地区。
 
 ## 方案一：纯 Cloudflare（推荐）
 
-需要 Node.js 22.13+（建议 24 LTS）、一个可使用 Browser Run 与 D1 的 Cloudflare 账号。
+需要 Node.js 22.13+（建议 24 LTS）、一个可使用 Workers 与 D1 的 Cloudflare 账号。
 
 ### 1. 安装并创建数据库
 
@@ -102,19 +99,19 @@ npm run deploy
 
 1. 打开部署返回的 `workers.dev` 或自定义域名。
 2. 输入 `ADMIN_TOKEN`。
-3. 点击「生成二维码」，用抖音 App 扫描页面截图中的**官方二维码**，在手机上确认登录。
-4. 点击「我已扫码，验证登录」。登录态经加密写入 D1。
+3. 点击「生成二维码」，用抖音 App 扫描**官方二维码**，在手机上确认登录。
+4. 页面每 6 秒检查状态，确认登录后自动加密写入 D1，也可手动点击验证。
 5. 点击「测试通知」，确认收得到消息。
 6. 选择「仅提醒」或「自动取消」，设置检测间隔，保存。
 
-无需一直开着管理页，Cron 会继续运行。二维码会话最长 3 分钟；二维码过期或浏览器断开后重新生成。截图接口也要求管理员口令，响应禁止缓存。
+无需一直开着管理页，Cron 会继续运行。二维码会话最长 3 分钟；二维码过期后重新生成。二维码接口也要求管理员口令，响应禁止缓存。
 
 ### Cloudflare 的实际限制
 
-- [Browser Run 免费额度](https://developers.cloudflare.com/browser-run/limits/)有限；官方当前列出免费计划每日 10 分钟浏览器时间。持续每 5 分钟检测通常不能只依靠免费额度，按实际浏览器耗时评估计划和费用。
-- 抖音可能限制数据中心 IP 或要求验证码。程序不会绕过验证码；纯 Cloudflare 出口能否登录、能否长期访问，需要在你的账号和区域实测。遇到限制时，增加间隔或切换本地/服务器环境，不能保证所有账号都可用。
-- [Cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/) 每分钟唤醒一次，程序根据数据库中的 `next_poll` 判断是否到期；未到期不会启动浏览器。新 Cron 配置可能需要一段时间传播。
-- 每轮浏览器操作最多 120 秒，失败后退避，最多退避到一小时（配置间隔更长时尊重配置）。没有全部读完时，不会据此判定某条记录已移除。
+- 不产生 Browser Run 用量；费用来自 Workers 请求/CPU、D1 及对应通知服务，实际按账号计划和用量计算。不能保证免费套餐足够长期使用。
+- [Cron](https://developers.cloudflare.com/workers/configuration/cron-triggers/) 每分钟唤醒一次，根据数据库中的 `next_poll` 判断是否到期；未到期不请求抖音。新 Cron 配置需要时间传播。
+- 纯协议不等于不受平台限制。抖音可能限制数据中心出口、使签名失效或要求额外验证。遇到验证或协议错误会停止本轮操作并显示错误，不能保证完全无人值守。
+- 每轮抖音操作设有 120 秒请求中止期限。失败后退避，最多退避到一小时（配置间隔更长时尊重配置）。没有读完全部页面，不会据此判定某条记录已移除。
 
 ## 方案二：服务器 / 本机
 
@@ -122,13 +119,12 @@ npm run deploy
 
 ```bash
 npm ci
-npx playwright install --with-deps chromium
 cp .env.example .env
 # 编辑 .env：替换两个独立随机密钥，填写 NOTIFICATIONS_JSON
 npm run dev
 ```
 
-打开 `http://127.0.0.1:8787`。服务器有图形桌面时，可以设置 `HEADED=true` 查看真实浏览器，人工处理官方页面提示。
+打开 `http://127.0.0.1:8787`。服务端无需桌面环境或浏览器进程。
 
 ### Docker Compose
 
@@ -149,12 +145,12 @@ ssh -L 8787:127.0.0.1:8787 your-server
 
 ## 通知渠道
 
-| 类型 | 参数 | 说明 |
-| --- | --- | --- |
-| `bark` | `url`、`key` | JSON POST；官方示例 `https://api.day.app/push`，也支持自建 Bark |
-| `wecom` | `url` | 企业微信群机器人完整 Webhook URL，检查 `errcode` |
-| `webhook` | `url`、可选 `token` | JSON POST，可附加 `Authorization: Bearer …` |
-| `smtp` | `host`、`port`、`username`、`password`、`from`、`to` | 直接 SMTP，隐式 TLS **465**，AUTH LOGIN；密码通常是邮箱授权码 |
+| 类型      | 参数                                                 | 说明                                                            |
+| --------- | ---------------------------------------------------- | --------------------------------------------------------------- |
+| `bark`    | `url`、`key`                                         | JSON POST；官方示例 `https://api.day.app/push`，也支持自建 Bark |
+| `wecom`   | `url`                                                | 企业微信群机器人完整 Webhook URL，检查 `errcode`                |
+| `webhook` | `url`、可选 `token`                                  | JSON POST，可附加 `Authorization: Bearer …`                     |
+| `smtp`    | `host`、`port`、`username`、`password`、`from`、`to` | 直接 SMTP，隐式 TLS **465**，AUTH LOGIN；密码通常是邮箱授权码   |
 
 SMTP 在 Cloudflare 中使用 TCP socket，在服务器中使用 Node TLS。当前**不支持 25 或 STARTTLS 587**；Cloudflare 禁止出站 25 端口，465 仍取决于目标邮件服务的网络及认证策略。无需额外邮件中转。消息为 UTF-8 MIME，多个收件人写进 `to` 数组。
 
@@ -188,16 +184,16 @@ node --env-file=.env scripts/client.mjs clear <预览返回的token>
 
 ## 配置项
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `MODE` | `notify` | 首次启动默认模式；管理页保存的设置优先 |
-| `POLL_INTERVAL_SECONDS` | `300` | 60–86400；管理页保存的设置优先 |
-| `MAX_PAGES` | `10` | 单次最多读取页数，1–100 |
-| `MAX_ACTIONS` | `5` | 一轮/一批最多取消数量，1–50 |
-| `ACTION_DELAY_MS` | `3000` | 取消请求后到复核前的间隔，至少 1000 |
-| `PAGE_TIMEOUT_MS` | `20000` | 单个页面/接口等待超时 |
-| `IGNORE_IDS` | 空 | 逗号分隔的保留作品 ID |
-| `NOTIFICATIONS_JSON` | `[]` | 通知渠道数组；仅提醒模式至少需一个渠道 |
+| 配置                    | 默认值   | 说明                                   |
+| ----------------------- | -------- | -------------------------------------- |
+| `MODE`                  | `notify` | 首次启动默认模式；管理页保存的设置优先 |
+| `POLL_INTERVAL_SECONDS` | `300`    | 60–86400；管理页保存的设置优先         |
+| `MAX_PAGES`             | `10`     | 单次最多读取页数，1–100                |
+| `MAX_ACTIONS`           | `5`      | 一轮/一批最多取消数量，1–50            |
+| `ACTION_DELAY_MS`       | `3000`   | 取消请求后到复核前的间隔，至少 1000    |
+| `PAGE_TIMEOUT_MS`       | `20000`  | 单个 HTTP 请求超时（保留旧配置名）     |
+| `IGNORE_IDS`            | 空       | 逗号分隔的保留作品 ID                  |
+| `NOTIFICATIONS_JSON`    | `[]`     | 通知渠道数组；仅提醒模式至少需一个渠道 |
 
 Cloudflare 的普通参数写入 `wrangler.jsonc` 的 `vars`，敏感参数使用 `wrangler secret put`。服务器使用 `.env` 或进程环境变量。
 
@@ -207,8 +203,8 @@ Cloudflare 的普通参数写入 `wrangler.jsonc` 的 `vars`，敏感参数使�
 - 数据库租约阻止 Cron、手动检测与清理同时修改账号。
 - 只读取本人推荐页，不下载视频，不取消喜欢，不修改关注/收藏。
 - 自动取消只允许处理本轮推荐接口中确认的作品，调用单向取消接口后重新读取完整列表。不能确认移除就报错停止，不把 HTTP 200 当作取消成功。
-- 网页接口和签名逻辑不是抖音开放平台承诺的稳定 API，可能变化。出现 `CANCEL_REQUEST` / `CANCEL_REJECTED` 时停止本轮操作并退避，不尝试点击其他按钮。
-- 登录态可能过期，届时通知重新扫码。Cloudflare 浏览器重启后从加密存储恢复 Cookie、localStorage 和 IndexedDB；这不保证平台永久维持登录。
+- 网页接口和签名逻辑不是抖音开放平台承诺的稳定 API，可能变化。出现协议错误、验证要求或 `CANCEL_REJECTED` 时停止本轮操作并退避。
+- 登录态可能过期，届时通知重新扫码。Worker 重新实例化后从加密存储恢复 Cookie 与签名计数；这不保证平台永久维持登录。v0.1 的浏览器登录态不直接兼容，升级后需重新扫码，并保留原 `AUTH_SECRET` 与数据库。
 - 检测周期之间发生又撤销的推荐可能被漏过；不完整扫描时，对未看到的记录保持原状态。因此某些重新推荐的情况只能在后续完整扫描中识别。
 - `/healthz` 只表示进程可用；运行是否正常请看管理页的最近成功时间、错误和待发送数量。
 
@@ -216,20 +212,21 @@ Cloudflare 的普通参数写入 `wrangler.jsonc` 的 `vars`，敏感参数使�
 
 ```bash
 npm ci
-npx playwright install chromium
 npm run check
 npm test
-npm run build:worker
+npm run test:worker
 ```
 
-测试覆盖接口解析、分页、首屏实时刷新、协议取消与结果复核、未扫描作品拒绝、旧签名剔除、去重与重新推荐、账号隔离、并发锁、登录态加密、四种通知协议、失败重试以及管理 API 鉴权。自动化测试不登录或操作真实抖音账号，也不向真实通知渠道发送消息。
+测试覆盖 SM3 / a_bogus 确定性向量、Cookie 隔离、登录跳转域名限制、分页、CSRF 取消与结果复核、未扫描作品拒绝、去重与重新推荐、账号隔离、并发锁、加密登录态恢复、四种通知协议、失败重试以及 API 鉴权。
 
-目录：`src/douyin.ts` 抖音适配；`src/service.ts` 工作流；`src/store.ts` 持久化；`src/notify.ts` / `src/smtp.ts` 通知；`src/worker.ts` Cloudflare 入口；`src/server.ts` 服务器入口。
+`test:worker` 构建后在真实 workerd 运行时和本地 D1 中执行扫码 → 读取 → 取消 → 复核流程，上游抖音响应使用模拟数据。测试不登录或操作真实账号，也不向真实通知渠道发送消息。
 
-参考：[Cloudflare Playwright](https://developers.cloudflare.com/browser-run/playwright/)、[TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)、[Playwright 登录态](https://playwright.dev/docs/auth)、[Bark](https://bark.day.app/)、[企业微信机器人](https://developer.work.weixin.qq.com/document/path/91770)。
+目录：`src/protocol/` HTTP 与签名；`src/douyin.ts` 抖音业务接口；`src/service.ts` 工作流；`src/store.ts` 持久化；`src/notify.ts` / `src/smtp.ts` 通知；`src/worker.ts` Cloudflare 入口；`src/server.ts` 服务器入口。
+
+参考：[Cloudflare TCP sockets](https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/)、[Bark](https://bark.day.app/)、[企业微信机器人](https://developer.work.weixin.qq.com/document/path/91770)。
 
 ## 安全反馈
 
-请勿在公开 Issue 中附带 Cookie、登录二维码、请求签名、Webhook 密钥或完整 HAR。提交兼容性问题时，提供已去除个人信息的错误码和控件结构。所有登录态、数据库、`.env`、`.dev.vars` 与运行截图都已加入忽略列表。
+请勿在公开 Issue 中附带 Cookie、登录二维码、请求签名、Webhook 密钥或完整 HAR。提交兼容性问题时，提供已去除个人信息的错误码和运行环境。所有登录态、数据库、`.env`、`.dev.vars` 与运行截图都已加入忽略列表。
 
 许可证：[MIT](LICENSE)。本项目与抖音/字节跳动无隶属关系。

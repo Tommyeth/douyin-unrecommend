@@ -9,7 +9,7 @@ import { deliver, flush } from '../src/notify.js';
 import { app } from '../src/app.js';
 import { Service } from '../src/service.js';
 import { smtp } from '../src/smtp.js';
-import type { Channel, Notice, Snapshot, MailConnect, Browsers } from '../src/types.js';
+import type { Channel, Notice, Snapshot, MailConnect } from '../src/types.js';
 
 const env = { ADMIN_TOKEN: 'a'.repeat(40), AUTH_SECRET: 'b'.repeat(40) };
 const video = { id: '1001', title: '测试视频', url: 'https://www.douyin.com/video/1001' };
@@ -240,7 +240,7 @@ test('通知失败保留待发队列并退避，成功不重复发送', async ()
 });
 test('管理 API 验证口令、同源、模式切换持久化和二维码访问', async () => {
   const store = new Store(sqlite(':memory:'));
-  const service = new Service(config(env), store, {} as Browsers, noMail);
+  const service = new Service(config(env), store, noMail);
   const web = app(service);
   assert.equal((await web.request('/api/status')).status, 401);
   assert.equal((await web.request('/api/login/image')).status, 401);
@@ -268,7 +268,7 @@ test('管理 API 验证口令、同源、模式切换持久化和二维码访问
     ).status,
     200,
   );
-  const s = await new Service(config(env), store, {} as Browsers, noMail).status();
+  const s = await new Service(config(env), store, noMail).status();
   assert.equal(s.mode, 'auto_cancel');
   assert.equal(s.interval, 60);
   assert.equal(
@@ -298,7 +298,7 @@ test('仅提醒模式不取消；自动模式处理已发现的记录并尊重�
         ]),
       });
       const store = new Store(sqlite(':memory:'));
-      const service = new Service(cfg, store, {} as Browsers, noMail);
+      const service = new Service(cfg, store, noMail);
       let cancels = 0;
       const videos = [video, { ...video, id: '1002' }, { ...video, id: '1003' }];
       const fakeBot = {
@@ -310,11 +310,8 @@ test('仅提醒模式不取消；自动模式处理已发现的记录并尊重�
           return snapshot(videos.slice(1));
         },
       };
-      service.withBrowser = async (fn) =>
-        fn(
-          fakeBot as unknown as import('../src/douyin.js').Douyin,
-          {} as import('playwright').BrowserContext,
-        );
+      service.withClient = async (fn) =>
+        fn(fakeBot as unknown as import('../src/douyin.js').Douyin);
       await service.poll();
       assert.equal(cancels, mode === 'notify' ? 0 : 1);
       assert.equal(JSON.parse((await store.get('last_scan'))!).added, 2);
@@ -333,7 +330,7 @@ test('通知失败在未登录时也能随调度重试', async () => {
     ]),
   });
   await store.enqueue(notice, ['test']);
-  const service = new Service(cfg, store, {} as Browsers, noMail);
+  const service = new Service(cfg, store, noMail);
   const realFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async () => new Response(null, { status: 204 })) as typeof fetch;

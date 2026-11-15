@@ -1,6 +1,3 @@
-import type { Browser, BrowserContext } from 'playwright';
-
-export type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type Video = { id: string; title: string; url: string };
 export type Snapshot = { videos: Video[]; complete: boolean; pages: number; account: string };
 export type Mode = 'notify' | 'auto_cancel';
@@ -22,11 +19,6 @@ export interface Sql {
   run(sql: string, ...params: (string | number | null)[]): Promise<number>;
   all<T>(sql: string, ...params: (string | number | null)[]): Promise<T[]>;
 }
-export interface Browsers {
-  launch(login?: boolean): Promise<{ browser: Browser; id: string }>;
-  connect(id: string): Promise<Browser>;
-  detach(browser: Browser): Promise<void>;
-}
 export interface MailSocket {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
@@ -45,4 +37,4 @@ export class SafeError extends Error {
 export const safeError = (error: unknown): SafeError =>
   error instanceof SafeError
     ? error
-    : new SafeError('UPSTREAM_ERROR', '浏览器或网络请求失败，请检查运行环境后重试。', 502);
+    : new SafeError('UPSTREAM_ERROR', '网络协议请求失败，请检查运行环境后重试。', 502);

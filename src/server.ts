@@ -1,17 +1,15 @@
 import { serve } from '@hono/node-server';
 import { app } from './app.js';
 import { config } from './config.js';
-import { NodeBrowsers, nodeMail, sqlite } from './node.js';
+import { nodeMail, sqlite } from './node.js';
 import { Service } from './service.js';
 import { Store } from './store.js';
 import { safeError } from './types.js';
 
 process.umask(0o077);
-const browsers = new NodeBrowsers();
 const service = new Service(
   config(process.env),
   new Store(sqlite(process.env.DATABASE_PATH ?? 'data/state.sqlite')),
-  browsers,
   nodeMail,
 );
 const server = serve({
@@ -28,5 +26,5 @@ for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {
     clearInterval(timer);
     server.close();
-    void browsers.close().finally(() => process.exit(0));
+    process.exit(0);
   });

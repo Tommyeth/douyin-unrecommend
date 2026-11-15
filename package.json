@@ -1,6 +1,6 @@
 {
   "name": "douyin-unrecommend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "抖音推荐防误触：扫码登录、定时检测、批量取消、多渠道提醒，支持纯 Cloudflare 与自托管服务器",
   "type": "module",
@@ -15,17 +15,17 @@
     "test": "tsx --test tests/*.test.ts",
     "build:worker": "wrangler deploy --dry-run --outdir dist/worker",
     "deploy": "wrangler deploy",
-    "db:migrate": "wrangler d1 migrations apply douyin-unrecommend --remote"
+    "db:migrate": "wrangler d1 migrations apply douyin-unrecommend --remote",
+    "test:worker": "npm run build:worker && node scripts/worker-smoke.cjs"
   },
   "dependencies": {
-    "@cloudflare/playwright": "1.4.0",
     "@hono/node-server": "2.1.8",
-    "hono": "4.13.18",
-    "playwright": "1.65.1"
+    "hono": "4.13.18"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261115.1",
     "@types/node": "^24.0.0",
+    "miniflare": "5.20261113.0-beta",
     "prettier": "3.10.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
