@@ -8,7 +8,7 @@
 
 上游许可如下，适用于对应移植部分。
 
-`src/protocol/fingerprint.ts` 参考该提交的 `fpk.go`、`challenge.go`、`login.go`。`src/protocol/challenge-profile.json` 来自 `profiles/challenge_profile.json`；`src/protocol/challenge-environment.ts` 改编自 `profiles/challenge_template_runner.js`，移除 Node 文件访问和 vm，改为 QuickJS 内的最小环境及有预算的任务调度。档案是上游预设数据，不包含本项目用户的浏览器会话。
+`src/protocol/fingerprint.ts` 参考该提交的 `fpk.go`、`challenge.go`、`login.go`。`src/protocol/challenge-profile.json` 来自 `profiles/challenge_profile.json`；早期最小环境参考 `profiles/challenge_template_runner.js`；现由 `src/protocol/environment/runtime.js` 中的 LinkeDOM、CanvasKit 桥接与有预算的任务调度替代，不使用上游 Node vm 或文件读取。档案是上游预设数据，不包含本项目用户的浏览器会话。
 
 ```text
 MIT License
@@ -89,3 +89,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ```
+
+## DOM、Canvas 与字体
+
+- [LinkeDOM](https://github.com/WebReflection/linkedom) 0.18.15，ISC 许可，提供 QuickJS 内的 DOM；原始许可见 [licenses/linkedom.txt](licenses/linkedom.txt)。
+- [Skia CanvasKit](https://skia.org/docs/user/modules/canvaskit/) 0.42.0，BSD-3-Clause 许可，提供 CPU Canvas 2D 栅格化。`scripts/prepare-wasm.mjs` 对锁定版本的加载器加入预编译 WASM 模块注入，避免 Worker 动态读取或编译 WASM。原始许可见 [licenses/canvaskit.txt](licenses/canvaskit.txt)。
+- Fontsource 分发的 Arimo / Tinos / Cousine 5.3.0，只嵌入 Latin、400、normal 的 WOFF 字体，未修改字体文件。字体采用 SIL Open Font License 1.1；原始版权及许可见 [Arimo](licenses/arimo.txt)、[Tinos](licenses/tinos.txt)、[Cousine](licenses/cousine.txt)。运行时的 Arial / Times New Roman / Courier New 名称映射到这些替代字体，并不包含微软字体，也不宣称像素完全相同。
+
+生成的运行文件存放在忽略目录 `src/generated/`，来源由 `package-lock.json` 锁定。分发构建产物时应一并保留本说明和 `licenses/`。

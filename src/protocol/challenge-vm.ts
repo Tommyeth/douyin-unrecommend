@@ -5,7 +5,8 @@ import {
   type QuickJSWASMModule,
 } from 'quickjs-emscripten-core';
 import { SafeError } from '../types.js';
-import { environment } from './challenge-environment.js';
+import { environment } from '../generated/environment.js';
+import { CanvasHost } from './canvas-host.js';
 import { UA } from './sign.js';
 
 let wasm: WebAssembly.Module | undefined;
@@ -19,6 +20,7 @@ export async function runChallenge(template: string) {
   engine ??= newQuickJSWASMModuleFromVariant(
     wasm ? newVariant(baseVariant, { wasmModule: wasm }) : baseVariant,
   );
+  const canvas = await CanvasHost.create();
   const vm = (await engine).newContext();
   let interrupts = 0;
   vm.runtime.setMemoryLimit(32 * 1024 * 1024);
@@ -48,6 +50,37 @@ export async function runChallenge(template: string) {
     return value;
   };
   try {
+    install('__canvasHost', (value) => canvas.dispatch(value));
+    install('__intlHost', (value) => {
+      if (value.length > 65536) throw Error('intl budget');
+      const { name, options, locales, method, args } = JSON.parse(value);
+      if (
+        ![
+          'NumberFormat',
+          'DateTimeFormat',
+          'Collator',
+          'PluralRules',
+          'ListFormat',
+          'RelativeTimeFormat',
+          'Segmenter',
+        ].includes(name) ||
+        !['format', 'formatToParts', 'resolvedOptions', 'compare', 'select', 'segment'].includes(
+          method,
+        )
+      )
+        throw Error('invalid intl operation');
+      const instance = new (Intl as any)[name](
+        locales,
+        name === 'DateTimeFormat' ? { timeZone: 'Asia/Shanghai', ...options } : options,
+      );
+      const result = instance[method](...args);
+      return JSON.stringify(method === 'segment' ? [...result] : result);
+    });
+    evalText(`globalThis.Intl={};for(const name of ['NumberFormat','DateTimeFormat','Collator','PluralRules','ListFormat','RelativeTimeFormat','Segmenter']) {
+      Intl[name]=function(locales,options){
+        for(const method of ['format','formatToParts','resolvedOptions','compare','select','segment'])this[method]=(...args)=>JSON.parse(__intlHost(JSON.stringify({name,locales,options,method,args})));
+      };
+    }`);
     install('btoa', (value) => Buffer.from(value, 'latin1').toString('base64'));
     install('atob', (value) => Buffer.from(value, 'base64').toString('latin1'));
     install('__randomBytes', (value) => {
@@ -90,5 +123,6 @@ export async function runChallenge(template: string) {
     throw new SafeError('LOGIN_CHALLENGE', '登录环境脚本引擎失败，已停止。');
   } finally {
     vm.dispose();
+    canvas.dispose();
   }
 }

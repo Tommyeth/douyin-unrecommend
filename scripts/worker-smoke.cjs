@@ -13,7 +13,13 @@ async function main() {
         message: 'success',
         data: {
           passportiv: 'fixture-iv',
-          template: 'module.exports={getData:async()=>({p_in:"fixture",e_in:{}})}',
+          template: `module.exports={getData:async()=>{
+            const node=document.createElement('div');node.innerHTML='<canvas id="probe" width="20" height="20"></canvas>';document.body.appendChild(node);
+            const canvas=document.getElementById('probe'),ctx=canvas.getContext('2d');ctx.fillStyle='red';ctx.fillRect(0,0,10,10);
+            const pixel=ctx.getImageData(1,1,1,1).data;
+            if(pixel[0]!==255||pixel[3]!==255||ctx.measureText('Hello').width<=0||!canvas.toDataURL().startsWith('data:image/png;base64,'))throw Error('render failed');
+            return {p_in:'fixture',e_in:{}};
+          }}`,
         },
       });
     if (u.hostname === 'mssdk.bytedance.com' && u.pathname === '/web/r/token')

@@ -1,5 +1,7 @@
 import { connect as connectSocket } from 'cloudflare:sockets';
 import challengeWasm from './generated/quickjs.wasm';
+import canvasWasm from './generated/canvaskit.wasm';
+import { configureCanvasWasm } from './protocol/canvas-host.js';
 import { configureChallengeWasm } from './protocol/challenge-vm.js';
 import { app } from './app.js';
 import { config } from './config.js';
@@ -7,6 +9,7 @@ import { Service } from './service.js';
 import { Store } from './store.js';
 import { safeError, type MailConnect, type Sql } from './types.js';
 configureChallengeWasm(challengeWasm);
+configureCanvasWasm(canvasWasm);
 
 export interface Env extends Record<string, unknown> {
   DB: D1Database;

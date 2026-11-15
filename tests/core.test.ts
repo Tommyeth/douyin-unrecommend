@@ -31,6 +31,7 @@ const noMail: MailConnect = async () => {
 };
 
 test('配置拒绝短密钥、错误间隔、未加密通知地址与邮件头注入', () => {
+  assert.equal(config(env).interval, 3600);
   assert.throws(() => config({}));
   assert.throws(() => config({ ...env, POLL_INTERVAL_SECONDS: '1' }));
   assert.throws(() =>

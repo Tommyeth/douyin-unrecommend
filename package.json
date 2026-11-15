@@ -18,17 +18,27 @@
     "predeploy": "node scripts/prepare-wasm.mjs",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply douyin-unrecommend --remote",
-    "test:worker": "npm run build:worker && node scripts/worker-smoke.cjs"
+    "test:worker": "npm run build:worker && node scripts/worker-smoke.cjs",
+    "precheck": "node scripts/prepare-wasm.mjs",
+    "pretest": "node scripts/prepare-wasm.mjs",
+    "predev": "node scripts/prepare-wasm.mjs",
+    "prestart": "node scripts/prepare-wasm.mjs"
   },
   "dependencies": {
+    "@fontsource/arimo": "5.3.0",
+    "@fontsource/cousine": "5.3.0",
+    "@fontsource/tinos": "5.3.0",
     "@hono/node-server": "2.1.8",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "canvaskit-wasm": "0.42.0",
     "hono": "4.13.18",
+    "linkedom": "0.18.15",
     "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261115.1",
     "@types/node": "^24.0.0",
+    "esbuild": "0.28.2",
     "miniflare": "5.20261113.0-beta",
     "prettier": "3.10.1",
     "tsx": "^4.20.0",

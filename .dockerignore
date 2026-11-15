@@ -6,6 +6,7 @@ node_modules
 .wrangler
 data
 dist
+src/generated
 *.har
 *.log
 uv.lock
