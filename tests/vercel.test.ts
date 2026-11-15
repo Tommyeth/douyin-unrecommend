@@ -6,6 +6,7 @@ import {
   readState,
   emptyState,
   requestLoginCancel,
+  queueLoginInput,
   type State,
   type StateBackend,
 } from '../src/vercel/state.js';
@@ -21,6 +22,9 @@ import { schema } from '../src/vercel/schema.js';
 import { chromium, type Browser } from 'playwright-core';
 import { unseal } from '../src/crypto.js';
 import { flush } from '../src/notify.js';
+import { parseLoginInput, applyLoginInput } from '../src/browser/input.js';
+import { serve } from '@hono/node-server';
+import type { AddressInfo } from 'node:net';
 
 const env = { ADMIN_TOKEN: 'a'.repeat(40), AUTH_SECRET: 'b'.repeat(40) };
 function backend() {
@@ -216,7 +220,7 @@ test('两种管理页脚本可解析，Vercel 内存 schema 与迁移一致', ()
   );
 });
 
-async function loginBrowser(loggedIn: boolean) {
+async function loginBrowser(loggedIn: boolean, html?: string) {
   const browser = await chromium.launch();
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (options) => {
@@ -227,9 +231,11 @@ async function loginBrowser(loggedIn: boolean) {
       await page.route('**/*', (route) =>
         route.fulfill({
           contentType: 'text/html; charset=utf-8',
-          body: loggedIn
-            ? '<div id="user_detail_element"><div data-e2e="user-info">抖音号：fixture</div></div>'
-            : '<p>等待人工扫码的模拟页面</p>',
+          body:
+            html ??
+            (loggedIn
+              ? '<div id="user_detail_element"><div data-e2e="user-info">抖音号：fixture</div></div>'
+              : '<p>等待人工扫码的模拟页面</p>'),
         }),
       );
       return page;
@@ -286,6 +292,160 @@ test('扫码只有持久化完成才报告 confirmed，新的调用能恢复登�
   } finally {
     gate.resolve();
     await browser.close();
+  }
+});
+
+test('人工输入绑定会话、消费后清除正文，重复请求不重复提交且登录结果可保存', async () => {
+  const b = backend();
+  await changeState(
+    b,
+    async (s, control) => {
+      const input = {
+        session: control.session,
+        id: crypto.randomUUID(),
+        frame: crypto.randomUUID(),
+        action: 'text',
+        text: 'fixture-code',
+      };
+      await assert.rejects(
+        queueLoginInput(b, { ...input, session: crypto.randomUUID() }),
+        /会话已结束/,
+      );
+      await queueLoginInput(b, input);
+      await queueLoginInput(b, input);
+      assert.equal((await control.poll()).input?.action, 'text');
+      assert.equal(JSON.stringify((await b.read()).state).includes('fixture-code'), false);
+      await queueLoginInput(b, input);
+      assert.equal((await control.poll()).input, null);
+      await s.set('auth', 'saved-after-input');
+    },
+    'login',
+  );
+  assert.equal(await readState(b, (s) => s.get('auth')), 'saved-after-input');
+  assert.equal((await b.read()).state.lease, null);
+});
+test('人工操作拒绝无界坐标、脚本操作、超长文本与任意快捷键', () => {
+  const base = {
+    session: crypto.randomUUID(),
+    id: crypto.randomUUID(),
+    frame: crypto.randomUUID(),
+  };
+  for (const action of [
+    { action: 'click', x: 2, y: 0 },
+    { action: 'click', x: NaN, y: 0 },
+    { action: 'eval', text: 'alert(1)' },
+    { action: 'text', text: 'a'.repeat(129) },
+    { action: 'key', key: 'Control+L' },
+  ])
+    assert.throws(() => parseLoginInput({ ...base, ...action }), /仅支持/);
+});
+test('人工输入与取消同时提交时，取消请求仍会生效', async () => {
+  const b = backend();
+  await assert.rejects(
+    changeState(
+      b,
+      async (_s, control) => {
+        const results = await Promise.allSettled([
+          queueLoginInput(b, {
+            session: control.session,
+            id: crypto.randomUUID(),
+            frame: crypto.randomUUID(),
+            action: 'key',
+            key: 'Tab',
+          }),
+          requestLoginCancel(b),
+        ]);
+        assert.equal(results[1].status, 'fulfilled');
+        assert.equal((await control.poll()).cancelled, true);
+      },
+      'login',
+    ),
+    /已取消扫码/,
+  );
+  assert.equal((await b.read()).state.lease, null);
+});
+test('旧画面和离开抖音域名时不执行人工点击', async () => {
+  const browser = await loginBrowser(false);
+  try {
+    const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
+    const page = await context.newPage();
+    await page.goto('https://www.douyin.com/user/self');
+    const frame = crypto.randomUUID();
+    const input = parseLoginInput({
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame,
+      action: 'click',
+      x: 0.5,
+      y: 0.5,
+    });
+    await assert.rejects(applyLoginInput(page, input, crypto.randomUUID()), /画面已更新/);
+    await page.goto('https://example.com');
+    await assert.rejects(applyLoginInput(page, input, frame), /离开抖音/);
+  } finally {
+    await browser.close();
+  }
+});
+test('管理页人工点击、输入和确认可贯通独立请求并保存模拟登录态', { timeout: 45000 }, async () => {
+  const b = backend();
+  const html = `<meta charset=utf-8><button id=option style="position:absolute;left:100px;top:100px;width:200px;height:50px" onclick="document.querySelector('#code').hidden=false">模拟验证方式</button><input id=code hidden style="position:absolute;left:100px;top:200px;width:200px;height:50px" onkeydown="if(event.key==='Enter'&&this.value==='fixture-code')document.querySelector('#user_detail_element').hidden=false"><div id=user_detail_element hidden><div data-e2e=user-info>抖音号：fixture</div></div>`;
+  const remote = await loginBrowser(false, html);
+  const api = vercelApp(env, b, async () => remote);
+  const server = serve({ fetch: api.fetch, hostname: '127.0.0.1', port: 0 });
+  if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+  const client = await chromium.launch();
+  try {
+    const p = await client.newPage({ viewport: { width: 1200, height: 1000 } });
+    await p.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port);
+    await p.locator('#token').fill(env.ADMIN_TOKEN);
+    await p.locator('#enter').click();
+    await p.locator('#login').click();
+    await p.locator('#qr').waitFor({ state: 'visible' });
+    const remotePage = remote.contexts()[0].pages()[0];
+    const ready = () =>
+      p.waitForFunction(
+        () => !(document.querySelector('#sendVerifyText') as HTMLButtonElement).disabled,
+      );
+    const click = async (selector: string) => {
+      await ready();
+      const target = (await remotePage.locator(selector).boundingBox())!;
+      const picture = (await p.locator('#qr').boundingBox())!;
+      await p.locator('#qr').click({
+        position: {
+          x: ((target.x + target.width / 2) / 1100) * picture.width,
+          y: ((target.y + target.height / 2) / 800) * picture.height,
+        },
+      });
+    };
+    await remote
+      .contexts()[0]
+      .addCookies([{ name: 'sessionid', value: 'fixture', domain: 'www.douyin.com', path: '/' }]);
+    await click('#option');
+    await p.waitForFunction(() =>
+      document.querySelector('#verifyState')?.textContent?.includes('页面已跳转'),
+    );
+    await click('#option');
+    await remotePage.locator('#code').waitFor({ state: 'visible' });
+    await click('#code');
+    await remotePage.waitForFunction(() => document.activeElement?.id === 'code');
+    await ready();
+    await p.locator('#verifyText').fill('fixture-code');
+    await p.locator('#sendVerifyText').click();
+    await remotePage.waitForFunction(
+      () => (document.querySelector('#code') as HTMLInputElement).value === 'fixture-code',
+    );
+    assert.equal(await p.locator('#verifyText').inputValue(), '');
+    await ready();
+    await p.locator('#verifyEnter').click();
+    await p.waitForFunction(
+      () => document.querySelector('#logged')?.textContent === '已保存登录态',
+    );
+    assert.equal(await p.locator('#verifyControls').isHidden(), true);
+    assert.ok(await readState(b, (s) => s.get('auth')));
+  } finally {
+    await client.close();
+    await remote.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 test('扫码后保存失败不能报告登录成功', async () => {

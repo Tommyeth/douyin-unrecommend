@@ -106,3 +106,7 @@ THE SOFTWARE.
 - 定时任务使用 Vercel 官方 `@vercel/schedules` 0.0.3 SDK；接口仍处于 Beta，使用方法见 [官方文档](https://vercel.com/docs/schedules/handle-runs)。
 
 仓库不保存浏览器二进制或用户登录数据；依赖版本由 `package-lock.json` 锁定，安装和部署时获取。
+
+## 中文验证画面字体
+
+Vercel Chromium 使用 [Noto CJK](https://github.com/notofonts/noto-cjk) 的 `NotoSansCJKsc-Regular.otf`，上游提交固定为 `f8d157532fbfaeda587e826d4cd5b21a49186f7c`，SIL Open Font License 1.1，原始许可见 [licenses/noto-cjk.txt](licenses/noto-cjk.txt)。构建时下载并校验 SHA-256，原始字体不修改；函数启动前配置到 Chromium 的字体目录。字体不提交为仓库二进制文件。

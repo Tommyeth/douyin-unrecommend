@@ -4,6 +4,7 @@ import { seal, unseal } from '../crypto.js';
 import { Store } from '../store.js';
 import { SafeError, type Sql } from '../types.js';
 import { schema } from './schema.js';
+import { parseLoginInput, type LoginInput, type LoginControl } from '../browser/input.js';
 
 const tables = ['kv', 'videos', 'outbox'] as const;
 type Rows = Record<(typeof tables)[number], Record<string, string | number | null>[]>;
@@ -16,6 +17,8 @@ export type State = {
     expires: number;
     kind?: 'operation' | 'login';
     cancelled?: boolean;
+    input?: LoginInput;
+    inputIds?: string[];
   };
 };
 export interface StateBackend {
@@ -129,18 +132,70 @@ export async function readState<T>(
   }
 }
 export async function requestLoginCancel(backend: StateBackend) {
-  const { state, etag } = await backend.read();
-  if (!state.lease || state.lease.kind !== 'login' || state.lease.expires <= Date.now())
-    return { cancelled: false };
-  if (!state.lease.cancelled) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { state, etag } = await backend.read();
+    if (!state.lease || state.lease.kind !== 'login' || state.lease.expires <= Date.now())
+      return { cancelled: false };
+    if (state.lease.cancelled) return { cancelled: true };
     state.lease.cancelled = true;
-    await backend.write(state, etag);
+    try {
+      await backend.write(state, etag);
+      return { cancelled: true };
+    } catch (e) {
+      if (!(e instanceof SafeError) || e.code !== 'BUSY' || attempt === 2) throw e;
+    }
   }
-  return { cancelled: true };
+}
+export async function queueLoginInput(backend: StateBackend, raw: unknown) {
+  const input = parseLoginInput(raw);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { state, etag } = await backend.read();
+    const lease = state.lease;
+    if (
+      !lease ||
+      lease.kind !== 'login' ||
+      lease.owner !== input.session ||
+      lease.expires <= Date.now() ||
+      lease.cancelled
+    )
+      throw new SafeError('LOGIN_EXPIRED', '扫码会话已结束，请重新生成。');
+    if (lease.input?.id === input.id || lease.inputIds?.includes(input.id))
+      return { accepted: true };
+    if (lease.input) throw new SafeError('INPUT_BUSY', '上一项操作仍在处理，请稍候。');
+    if ((lease.inputIds?.length ?? 0) >= 40)
+      throw new SafeError('INPUT_LIMIT', '本次操作已达上限，请重新扫码。');
+    lease.input = input;
+    try {
+      await backend.write(state, etag);
+      return { accepted: true };
+    } catch (e) {
+      if (!(e instanceof SafeError) || e.code !== 'BUSY' || attempt === 2) throw e;
+    }
+  }
+}
+async function pollLoginControl(backend: StateBackend, owner: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { state, etag } = await backend.read();
+    const lease = state.lease;
+    if (!lease || lease.owner !== owner || lease.cancelled || lease.expires <= Date.now())
+      return { cancelled: true, input: null };
+    if (!lease.input) return { cancelled: false, input: null };
+    const input = lease.input;
+    delete lease.input;
+    lease.inputIds = [...(lease.inputIds ?? []), input.id];
+    // Consume before execution: lost responses must not repeat a verification submission.
+    try {
+      await backend.write(state, etag);
+      return { cancelled: false, input };
+    } catch (e) {
+      if (!(e instanceof SafeError) || e.code !== 'BUSY' || attempt === 2) throw e;
+    }
+  }
+  return { cancelled: false, input: null };
 }
 export async function changeState<T>(
   backend: StateBackend,
-  fn: (store: Store, control: { cancelled: () => Promise<boolean> }) => Promise<T>,
+  fn: (store: Store, control: LoginControl) => Promise<T>,
   kind: 'operation' | 'login' = 'operation',
 ) {
   const { state, etag } = await backend.read();
@@ -158,27 +213,32 @@ export async function changeState<T>(
   }
   try {
     return await fn(db.store, {
-      cancelled: async () => {
-        const current = await backend.read();
-        return current.state.lease?.owner !== owner || !!current.state.lease.cancelled;
-      },
+      session: owner,
+      poll: () => pollLoginControl(backend, owner),
     });
   } finally {
     try {
       // CAS also prevents an expired task from overwriting the next lease holder.
-      try {
+      if (kind !== 'login') {
         await backend.write({ ...state, rows: db.rows(), lease: null }, claimed);
-      } catch (error) {
-        if (kind === 'login') {
+      } else {
+        for (let attempt = 0; attempt < 4; attempt++) {
           const current = await backend.read();
-          if (current.state.lease?.owner === owner && current.state.lease.cancelled) {
-            // A separate HTTP request can cancel even if Vercel keeps the stream connected.
-            // Preserve the previous account state instead of committing the cancelled login.
-            await backend.write({ ...current.state, lease: null }, current.etag);
-            throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
+          if (current.state.lease?.owner !== owner || current.state.lease.expires <= Date.now())
+            throw new SafeError('BUSY', '扫码租约已失效，未覆盖其他任务的状态。');
+          const cancelled = !!current.state.lease.cancelled;
+          try {
+            await backend.write(
+              { ...current.state, rows: cancelled ? current.state.rows : db.rows(), lease: null },
+              current.etag,
+            );
+          } catch (e) {
+            if (e instanceof SafeError && e.code === 'BUSY' && attempt < 3) continue;
+            throw e;
           }
+          if (cancelled) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
+          break;
         }
-        throw error;
       }
     } finally {
       db.close();

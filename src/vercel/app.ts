@@ -11,6 +11,7 @@ import {
   changeState,
   readState,
   requestLoginCancel,
+  queueLoginInput,
   type StateBackend,
 } from './state.js';
 
@@ -73,6 +74,9 @@ export function vercelApp(
   });
   api.post('/api/notifications/test', async (c) => c.json(await change((s) => s.testNotify())));
   api.post('/api/login/cancel', async (c) => c.json(await requestLoginCancel(backend!)));
+  api.post('/api/login/input', async (c) =>
+    c.json(await queueLoginInput(backend!, await c.req.json())),
+  );
   api.post('/api/login/stream', (c) => {
     const controller = new AbortController();
     const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
@@ -87,7 +91,7 @@ export function vercelApp(
         try {
           await changeState(
             backend!,
-            (store, control) => service(store).login(signal, emit, control.cancelled),
+            (store, control) => service(store).login(signal, emit, control),
             'login',
           );
           emit({ type: 'confirmed' });

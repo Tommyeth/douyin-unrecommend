@@ -7,12 +7,17 @@ import type { Store } from '../store.js';
 import { Douyin, identity, prepareLogin, sleep } from './douyin.js';
 import { launchBrowser, type LaunchBrowser } from './launch.js';
 import { flush } from '../notify.js';
+import { applyLoginInput, type LoginControl } from './input.js';
 
 type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type LoginEvent = {
-  type: 'waiting' | 'image' | 'confirmed';
+  type: 'waiting' | 'image' | 'confirmed' | 'input';
   image?: string;
   expires?: number;
+  session?: string;
+  frame?: string;
+  id?: string;
+  message?: string;
 };
 export class BrowserService extends Workflow {
   private readonly notificationDeadline = Date.now() + 250000;
@@ -49,11 +54,7 @@ export class BrowserService extends Workflow {
     );
     return context;
   }
-  async login(
-    signal: AbortSignal,
-    emit: (event: LoginEvent) => void,
-    cancelled: () => Promise<boolean> = async () => false,
-  ) {
+  async login(signal: AbortSignal, emit: (event: LoginEvent) => void, control?: LoginControl) {
     let browser: Browser | undefined;
     let phase = 'browser_start';
     let timedOut = false;
@@ -77,8 +78,10 @@ export class BrowserService extends Workflow {
       let previousImage = '';
       let refreshedAfterSession = false;
       let screenshotFailures = 0;
+      let frame = '';
       while (Date.now() < expires && !signal.aborted) {
-        if (await cancelled()) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
+        const command = await control?.poll();
+        if (command?.cancelled) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
         phase = 'login_identity';
         let account: string | undefined;
         try {
@@ -98,6 +101,14 @@ export class BrowserService extends Workflow {
             waitUntil: 'domcontentloaded',
             timeout: 30000,
           });
+          if (command?.input)
+            emit({
+              type: 'input',
+              id: command.input.id,
+              message: '登录页面已跳转，请查看新画面后重新操作。',
+            });
+          previousImage = '';
+          frame = '';
           continue;
         }
         if (account) {
@@ -116,6 +127,19 @@ export class BrowserService extends Workflow {
           await this.store.delete('next_poll');
           // The caller emits confirmed only after the remote state is durably committed.
           return;
+        }
+        if (command?.input) {
+          try {
+            await applyLoginInput(page, command.input, frame);
+            emit({ type: 'input', id: command.input.id, message: '操作已发送，请查看新画面。' });
+          } catch (e) {
+            emit({
+              type: 'input',
+              id: command.input.id,
+              message: e instanceof SafeError ? e.message : '操作未完成，请查看画面后手动重试。',
+            });
+          }
+          previousImage = '';
         }
         phase = 'login_image';
         let image: string;
@@ -139,7 +163,8 @@ export class BrowserService extends Workflow {
           throw e;
         }
         if (image !== previousImage) {
-          emit({ type: 'image', image, expires });
+          frame = crypto.randomUUID();
+          emit({ type: 'image', image, expires, frame, session: control?.session });
           previousImage = image;
         } else emit({ type: 'waiting', expires });
         await sleep(3000);
