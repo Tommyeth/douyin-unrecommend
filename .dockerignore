@@ -1,0 +1,11 @@
+node_modules
+.venv
+.git
+.env*
+.dev.vars*
+.wrangler
+data
+dist
+*.har
+*.log
+uv.lock

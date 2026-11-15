@@ -1,0 +1,6 @@
+[
+  {"name":"我的手机","type":"bark","url":"https://api.day.app/push","key":"YOUR_BARK_DEVICE_KEY"},
+  {"name":"企微群","type":"wecom","url":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"},
+  {"name":"自建服务","type":"webhook","url":"https://example.com/hooks/douyin","token":"YOUR_WEBHOOK_TOKEN"},
+  {"name":"邮箱","type":"smtp","host":"smtp.example.com","port":465,"username":"bot@example.com","password":"YOUR_SMTP_AUTH_CODE","from":"bot@example.com","to":["you@example.com"]}
+]

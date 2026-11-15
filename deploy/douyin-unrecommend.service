@@ -1,0 +1,18 @@
+[Unit]
+Description=Douyin recommendation guard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=douyin
+WorkingDirectory=/opt/douyin-unrecommend
+EnvironmentFile=/opt/douyin-unrecommend/.env
+ExecStart=/usr/bin/env npm start
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=20
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
