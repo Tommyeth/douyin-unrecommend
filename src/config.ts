@@ -11,7 +11,6 @@ export type Config = {
   timeout: number;
   ignoreIds: Set<string>;
   channels: Channel[];
-  cancelSelector: string;
 };
 export function config(env: Record<string, unknown>): Config {
   const number = (key: string, fallback: number, min: number, max: number) => {
@@ -76,7 +75,6 @@ export function config(env: Record<string, unknown>): Config {
     maxActions: number('MAX_ACTIONS', 5, 1, 50),
     actionDelay: number('ACTION_DELAY_MS', 3000, 1000, 30000),
     timeout: number('PAGE_TIMEOUT_MS', 20000, 5000, 60000),
-    cancelSelector: String(env.CANCEL_SELECTOR ?? ''),
   };
 }
 export function requireChannels(c: Config) {

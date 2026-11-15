@@ -5,6 +5,53 @@ import { SafeError, type Snapshot, type Video } from './types.js';
 
 export const HOME = 'https://www.douyin.com/user/self?from_tab_name=main&showTab=recommend';
 export const FEED = '/aweme/v1/web/familiar/recommend/feed/';
+export const CANCEL = '/aweme/v1/web/familiar/recommend/cancel';
+const CANCEL_QUERY = [
+  'device_platform',
+  'aid',
+  'channel',
+  'pc_client_type',
+  'pc_libra_divert',
+  'update_version_code',
+  'support_h265',
+  'support_dash',
+  'version_code',
+  'version_name',
+  'cookie_enabled',
+  'screen_width',
+  'screen_height',
+  'browser_language',
+  'browser_platform',
+  'browser_name',
+  'browser_version',
+  'browser_online',
+  'engine_name',
+  'engine_version',
+  'os_name',
+  'os_version',
+  'cpu_core_num',
+  'device_memory',
+  'platform',
+  'downlink',
+  'effective_type',
+  'round_trip_time',
+  'webid',
+  'uifid',
+  'verifyFp',
+  'fp',
+];
+export function cancelURL(feedURL: string) {
+  if (!isFeed(feedURL)) throw new SafeError('CANCEL_CONTEXT', '缺少本轮推荐接口上下文。');
+  const source = new URL(feedURL);
+  const target = new URL(CANCEL, 'https://www.douyin.com');
+  for (const key of CANCEL_QUERY) {
+    const value = source.searchParams.get(key);
+    if (value !== null) target.searchParams.set(key, value);
+  }
+  target.searchParams.set('app_name', 'douyin_web');
+  // 不复制旧 a_bogus / msToken，抖音页面的请求拦截器会为此次 POST 签名。
+  return target.toString();
+}
 export const LIST = '#user_detail_element [data-e2e="user-like-list"] [data-e2e="scroll-list"]';
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export function isFeed(url: string) {
@@ -54,6 +101,8 @@ export async function identity(page: Page): Promise<string> {
 }
 
 export class Douyin {
+  private feedURL = '';
+  private scanned = new Set<string>();
   constructor(
     public page: Page,
     public cfg: Config,
@@ -61,6 +110,8 @@ export class Douyin {
     page.setDefaultTimeout(cfg.timeout);
   }
   async scan(): Promise<Snapshot> {
+    this.feedURL = '';
+    this.scanned.clear();
     const page = this.page;
     const queue: Response[] = [];
     const onResponse = (response: Response) => {
@@ -77,7 +128,13 @@ export class Douyin {
       const account = await identity(page);
       if ((await page.locator('#semiTabrecommend').getAttribute('aria-selected')) !== 'true')
         throw new SafeError('WRONG_TAB', '未进入个人推荐标签，停止读取。');
-      let response = await waitResponse(this.cfg.timeout);
+      let response = await waitResponse(1500);
+      if (!response) {
+        // 首屏可能由服务端渲染；切换标签使官方页面重新发起推荐接口请求。
+        await page.locator('#semiTablike').click();
+        await page.locator('#semiTabrecommend').click();
+        response = await waitResponse(this.cfg.timeout);
+      }
       if (!response)
         throw new SafeError('FEED_TIMEOUT', '推荐接口未返回。页面空白不代表没有推荐。');
       const found = new Map<string, Video>();
@@ -85,7 +142,11 @@ export class Douyin {
       for (let i = 0; i < this.cfg.maxPages; i++) {
         if (!response.ok()) throw new SafeError('FEED_HTTP', '推荐接口 HTTP 请求失败。');
         const batch = parseFeed(await response.json());
-        for (const video of batch.videos) found.set(video.id, video);
+        this.feedURL = response.url();
+        for (const video of batch.videos) {
+          found.set(video.id, video);
+          this.scanned.add(video.id);
+        }
         if (!batch.more)
           return { videos: [...found.values()], complete: true, pages: i + 1, account };
         if (cursors.has(batch.cursor))
@@ -119,35 +180,36 @@ export class Douyin {
   }
 
   async cancel(video: Video) {
-    await this.page.goto(video.url, { waitUntil: 'domcontentloaded' });
-    // 只接受明确的取消/已推荐状态，不点击“推荐”或“喜欢”。选择器不匹配即停。
-    const explicit = this.page.getByText('取消推荐', { exact: true });
-    const selected = this.cfg.cancelSelector
-      ? this.page.locator(this.cfg.cancelSelector)
-      : this.page.getByText('已推荐', { exact: true });
-    let button = explicit;
+    if (!/^\d+$/.test(video.id) || !this.scanned.has(video.id))
+      throw new SafeError('CANCEL_CONTEXT', '只允许取消本轮推荐接口中已确认的作品。');
+    if (new URL(this.page.url()).origin !== 'https://www.douyin.com')
+      throw new SafeError('CANCEL_CONTEXT', '当前页面不在抖音官方域名，停止取消。');
+    const url = cancelURL(this.feedURL);
+    let result: { http: number; code?: number };
     try {
-      await explicit.waitFor({ state: 'visible', timeout: 3000 });
-    } catch {
-      button = selected;
-    }
-    if ((await button.count()) !== 1 || !(await button.isVisible()))
-      throw new SafeError(
-        'CANCEL_SELECTOR',
-        '未找到唯一的“取消推荐/已推荐”控件，停止取消；请检查页面版本。',
+      result = await this.page.evaluate(
+        async ({ url, id, timeout }) => {
+          const response = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ item_id: id, source: '0', type: '2' }).toString(),
+            signal: AbortSignal.timeout(timeout),
+          });
+          const body = (await response.json().catch(() => null)) as { status_code?: number } | null;
+          // 不把带签名 URL、Cookie 或响应中的用户数据带出页面。
+          return { http: response.status, code: body?.status_code };
+        },
+        { url, id: video.id, timeout: this.cfg.timeout },
       );
-    const label = ((await button.getAttribute('aria-label')) || (await button.innerText())).trim();
-    if (!['取消推荐', '已推荐'].includes(label))
-      throw new SafeError('CANCEL_STATE', '控件无法证明已推荐状态，拒绝点击。');
-    await button.click();
-    if (label === '已推荐') {
-      try {
-        await explicit.waitFor({ state: 'visible', timeout: 1500 });
-      } catch {
-        /* 某些版本直接切换状态；仍必须用列表接口复核。 */
-      }
-      if ((await explicit.count()) === 1 && (await explicit.isVisible())) await explicit.click();
+    } catch {
+      throw new SafeError('CANCEL_REQUEST', '取消协议请求失败，停止后续操作。');
     }
+    if (result.http !== 200 || result.code !== 0)
+      throw new SafeError('CANCEL_REJECTED', '抖音未确认取消成功，请检查登录或风控提示。');
     await sleep(this.cfg.actionDelay);
     const check = await this.scan();
     if (!check.complete || check.videos.some((v) => v.id === video.id))
