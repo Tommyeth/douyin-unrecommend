@@ -3,17 +3,21 @@ import { seal, unseal } from './crypto.js';
 import { Douyin } from './douyin.js';
 import { CookieJar, Http, type Cookie } from './protocol/http.js';
 import { Passport } from './protocol/login.js';
+import { TicketGuard, type TicketState } from './protocol/ticket.js';
+import { refreshToken } from './protocol/token.js';
 import { flush } from './notify.js';
 import { Store } from './store.js';
 import { SafeError, safeError, type MailConnect } from './types.js';
 
-type State = { version: 1; cookies: Cookie[]; counter?: number };
+type State = { version: 1; cookies: Cookie[]; counter?: number; ticket?: TicketState };
 type Login = {
   expires: number;
   token: string;
   image: string;
   state: State;
   lastPoll: number;
+  retryAt?: number;
+  throttles?: number;
   portrait: string;
   confirmed?: boolean;
 };
@@ -66,10 +70,16 @@ export class Service {
       this.cfg,
     );
     bot.signer.counter = state.counter ?? 2;
+    if (state.ticket) bot.http.guard = new TicketGuard(state.ticket);
     return bot;
   }
   state(bot: Douyin): State {
-    return { version: 1, cookies: bot.http.jar.cookies, counter: bot.signer.counter };
+    return {
+      version: 1,
+      cookies: bot.http.jar.cookies,
+      counter: bot.signer.counter,
+      ticket: bot.http.guard?.state,
+    };
   }
   async saveLogin(login: Login) {
     await this.store.set(
@@ -109,7 +119,12 @@ export class Service {
         expires,
         token: d.token,
         image,
-        state: { version: 1, cookies: http.jar.cookies, counter: passport.signer.counter },
+        state: {
+          version: 1,
+          cookies: http.jar.cookies,
+          counter: passport.signer.counter,
+          ticket: http.guard?.state,
+        },
         lastPoll: 0,
         portrait: passport.portrait,
       });
@@ -126,15 +141,33 @@ export class Service {
         passport = new Passport(bot.http, login.portrait);
       passport.signer = bot.signer;
       if (!login.confirmed) {
+        if (login.retryAt && Date.now() < login.retryAt)
+          return {
+            ok: false,
+            status: 'throttled',
+            retryAfterSeconds: Math.ceil((login.retryAt - Date.now()) / 1000),
+          };
         if (Date.now() - login.lastPoll < 5500) return { ok: false, status: 'waiting' };
         login.lastPoll = Date.now();
         await this.saveLogin(login);
         let j;
         try {
           j = await passport.poll(login.token);
+          login.retryAt = undefined;
+          login.throttles = 0;
+        } catch (e) {
+          if (e instanceof SafeError && e.code === 'PASSPORT_RATE_LIMIT') {
+            login.throttles = (login.throttles || 0) + 1;
+            const retryAfterSeconds = Math.min(60, 10 * 2 ** Math.min(login.throttles - 1, 3));
+            login.retryAt = Date.now() + retryAfterSeconds * 1000;
+            return { ok: false, status: 'throttled', retryAfterSeconds };
+          }
+          throw e;
         } finally {
           login.state = this.state(bot);
           await this.saveLogin(login);
+          if (passport.diagnostic)
+            await this.store.set('login_diagnostic', JSON.stringify(passport.diagnostic));
         }
         const status = String(j.data?.status);
         if (status === 'expired' || status === '5') {
@@ -181,6 +214,7 @@ export class Service {
       bot = this.client(state, controller.signal),
       timer = setTimeout(() => controller.abort(), 120000);
     try {
+      await refreshToken(bot.http);
       return await fn(bot);
     } finally {
       clearTimeout(timer);
@@ -320,6 +354,7 @@ export class Service {
   async status() {
     return {
       loggedIn: !!(await this.store.get('auth')),
+      loginDiagnostic: JSON.parse((await this.store.get('login_diagnostic')) ?? 'null'),
       ...(await this.settings()),
       channels: this.channels(),
       lastScan: JSON.parse((await this.store.get('last_scan')) ?? 'null'),

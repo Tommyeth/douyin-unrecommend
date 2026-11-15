@@ -1,5 +1,6 @@
 import { SafeError } from '../types.js';
 import { UA } from './sign.js';
+import type { TicketGuard } from './ticket.js';
 export type Cookie = {
   name: string;
   value: string;
@@ -86,8 +87,10 @@ const HOSTS = new Set([
   'login.douyin.com',
   'sso.douyin.com',
   'ttwid.bytedance.com',
+  'mssdk.bytedance.com',
 ]);
 export class Http {
+  guard?: TicketGuard;
   constructor(
     public jar = new CookieJar(),
     public transport: typeof fetch = fetch,
@@ -112,6 +115,7 @@ export class Http {
       Origin: 'https://www.douyin.com',
     });
     new Headers(init.headers).forEach((v, k) => headers.set(k, v));
+    await this.guard?.sync(this.jar);
     headers.set('Cookie', this.jar.header(url));
     try {
       const transport = this.transport;
@@ -124,6 +128,9 @@ export class Http {
           : AbortSignal.timeout(this.timeout),
       });
       this.jar.absorb(url, r.headers.getSetCookie());
+      const ms = r.headers.get('x-ms-token');
+      if (ms && ms.length <= 2048 && !/[;\s]/.test(ms)) this.jar.set('msToken', ms);
+      this.guard?.absorb(r);
       return r;
     } catch (e) {
       if (e instanceof SafeError) throw e;

@@ -6,6 +6,9 @@ import { Douyin, FEED, CANCEL, SELF } from '../src/douyin.js';
 import { config } from '../src/config.js';
 import { Service } from '../src/service.js';
 import { Passport } from '../src/protocol/login.js';
+import { TicketGuard } from '../src/protocol/ticket.js';
+import { tokenReport, refreshToken } from '../src/protocol/token.js';
+import { createECDH, hkdfSync, createHmac } from 'node:crypto';
 import { Store } from '../src/store.js';
 import { sqlite } from '../src/node.js';
 const cfg = config({
@@ -14,6 +17,10 @@ const cfg = config({
   ACTION_DELAY_MS: '1000',
   PAGE_TIMEOUT_MS: '5000',
 });
+const serverPoint = Buffer.from(
+  '046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5',
+  'hex',
+);
 function fixture(
   ids = new Set(['101', '102']),
   options: { noEffect?: boolean; rejected?: boolean; badCSRF?: boolean; loop?: boolean } = {},
@@ -25,14 +32,43 @@ function fixture(
     const u = new URL(String(input)),
       headers = new Headers(init?.headers),
       method = init?.method || 'GET';
+    if (u.hostname === 'mssdk.bytedance.com' && u.pathname === '/web/r/token')
+      return new Response('{}', { headers: { 'x-ms-token': 'fixture-ms-token' } });
     if (u.pathname === '/')
       return new Response('', {
         headers: {
           'Set-Cookie': 'passport_csrf_token=anonymous; Path=/; Domain=.douyin.com; Secure',
         },
       });
-    if (u.pathname === '/ttwid/check/') return new Response('{}');
+    if (u.pathname === '/ttwid/union/register/')
+      return Response.json(
+        { status_code: 0 },
+        {
+          headers: {
+            'Set-Cookie': 'ttwid=anonymous-device; Domain=.bytedance.com; Path=/; Secure',
+          },
+        },
+      );
+    if (u.pathname === '/ttwid/check/') {
+      assert.match(headers.get('Cookie') || '', /ttwid=anonymous-device/);
+      return Response.json({ status_code: 0 });
+    }
+    if (u.pathname === '/passport/user_info/get_sec_ts/')
+      return Response.json(
+        { message: 'success' },
+        { headers: { 'bd-ticket-guard-sec-ts': '12345' } },
+      );
+    if (u.pathname === '/service/2/abtest_config/')
+      return new Response(null, { headers: { 'x-ware-csrf-token': '0, ticket-csrf, 0, 0, 0' } });
+    if (u.pathname === '/passport/ticket_guard/get_client_cert/') {
+      assert.equal(headers.get('x-secsdk-csrf-token'), 'ticket-csrf');
+      return Response.json({
+        message: 'success',
+        data: { server_cert: 'pub.' + serverPoint.toString('base64') },
+      });
+    }
     if (u.pathname === '/passport/web/get_qrcode/') {
+      assert.match(headers.get('Cookie') || '', /bd_ticket_guard_client_data_v2=/);
       portrait = headers.get('x-tt-passport-verify-portrait')!;
       assert.ok(portrait.endsWith('.login'));
       assert.ok(u.searchParams.get('sign'));
@@ -43,6 +79,7 @@ function fixture(
       });
     }
     if (u.pathname === '/passport/web/check_qrconnect/') {
+      assert.match(headers.get('Cookie') || '', /bd_ticket_guard_client_data_v2=/);
       assert.equal(headers.get('x-tt-passport-verify-portrait'), portrait);
       assert.equal(new URLSearchParams(String(init?.body)).get('token'), 'test-token');
       assert.ok(headers.get('Cookie')?.includes('passport_csrf_token=anonymous'));
@@ -119,6 +156,35 @@ test('纯 JS SM3 标准向量和 a_bogus 上游确定性向量匹配', () => {
     'df0fgq6idxW5cdMSuOTiH1nlrHnMNsWyGMi/bCol9PL7bwUTXbYeYOcWaxo8bMdfpWpwiFV7ZDTMYnncF07TZCHkLmpDSmwWkUA5V66oZ1wXbMiQLNfBCw8LeJtbWOvEmAojJ1UlWtmO2dC4LpaTUBlytApismipQHabdc4aE9ef6zT9Bqq2uxSdO7zqwj==',
   );
   assert.notEqual(s.sign('aid=6383', 'item_id=1'), s.sign('aid=6383', 'item_id=2'));
+});
+test('P-256 登录凭证经序列化恢复，ECDH/HKDF/HMAC 与 Node 独立实现一致', async () => {
+  const original = await TicketGuard.create();
+  const guard = new TicketGuard(JSON.parse(JSON.stringify(original.state)));
+  guard.state.serverCert = 'pub.' + serverPoint.toString('base64');
+  guard.absorb(new Response(null, { headers: { 'bd-ticket-guard-sec-ts': 'sec.1.opaque' } }));
+  assert.equal(guard.state.secTs, 'sec.1.opaque');
+  const jar = new CookieJar();
+  await guard.sync(jar);
+  const v2 = JSON.parse(
+    Buffer.from(decodeURIComponent(jar.get('bd_ticket_guard_client_data_v2')), 'base64').toString(),
+  );
+  const ecdh = createECDH('prime256v1');
+  ecdh.setPrivateKey(Buffer.from(guard.state.privateKey.d!, 'base64url'));
+  const derived = hkdfSync(
+    'sha256',
+    ecdh.computeSecret(serverPoint),
+    Buffer.alloc(32),
+    Buffer.alloc(0),
+    32,
+  );
+  const expected = createHmac('sha256', Buffer.from(derived))
+    .update('sec_ts=sec.1.opaque')
+    .digest('base64');
+  assert.equal(v2.req_sign, expected);
+  assert.equal(v2.ree_public_key, guard.state.publicKey);
+  assert.ok(!JSON.stringify(jar.cookies).includes(guard.state.privateKey.d!));
+  guard.state.serverCert = 'pub.AQ==';
+  await assert.rejects(guard.sync(jar), /公钥格式无效/);
 });
 test('Cookie 按域名、路径、Secure 和有效期隔离；拒绝恶意 Domain', () => {
   const jar = new CookieJar();
@@ -215,6 +281,7 @@ test('扫码会话加密保存，新的服务实例恢复后完成登录和读�
   const saved = (await store.get('login'))!;
   assert.ok(!saved.includes('test-token'));
   assert.ok(!saved.includes('anonymous'));
+  assert.ok(!saved.includes('privateKey'));
   const second = new Service(cfg, store, mail, f.transport);
   assert.equal((await second.loginImage()).length, 8);
   assert.equal((await second.finishLogin()).ok, true);
@@ -224,4 +291,84 @@ test('扫码会话加密保存，新的服务实例恢复后完成登录和读�
   const third = new Service(cfg, store, mail, f.transport);
   const result = await third.preview();
   assert.equal(result.videos.length, 2);
+});
+test('匿名设备校验失败时停止，不继续发出二维码请求', async () => {
+  const f = fixture();
+  let qrRequested = false;
+  const transport: typeof fetch = (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/ttwid/check/')
+      return Promise.resolve(Response.json({ status_code: 1, message: 'check not pass' }));
+    if (path === '/passport/web/get_qrcode/') qrRequested = true;
+    return f.transport(input, init);
+  };
+  await assert.rejects(
+    new Passport(new Http(new CookieJar(), transport)).start(),
+    /匿名设备校验失败/,
+  );
+  assert.equal(qrRequested, false);
+});
+test('登录限流保存退避状态，重建服务不会重复请求，退避后可完成登录', async () => {
+  const f = fixture(),
+    store = new Store(sqlite(':memory:'));
+  let polls = 0;
+  const transport: typeof fetch = (input, init) => {
+    if (new URL(String(input)).pathname === '/passport/web/check_qrconnect/' && ++polls === 1)
+      return Promise.resolve(
+        Response.json({ data: { error_code: 7, captcha: '', desc_url: '' }, message: 'error' }),
+      );
+    return f.transport(input, init);
+  };
+  const mail = async () => {
+    throw Error('unused');
+  };
+  const first = new Service(cfg, store, mail, transport);
+  await first.startLogin();
+  const result = await first.finishLogin();
+  assert.equal(result.status, 'throttled');
+  assert.equal(result.retryAfterSeconds, 10);
+  const second = new Service(cfg, store, mail, transport);
+  assert.equal((await second.finishLogin()).status, 'throttled');
+  assert.equal(polls, 1);
+  const diagnostic = (await second.status()).loginDiagnostic;
+  assert.equal(diagnostic.code, 7);
+  assert.equal(diagnostic.captcha, false);
+  const login = await second.loadLogin();
+  login.retryAt = 0;
+  login.lastPoll = 0;
+  await second.saveLogin(login);
+  assert.equal((await second.finishLogin()).ok, true);
+  assert.equal(polls, 2);
+});
+test('验证码与限流分开处理，诊断不包含验证码凭证', async () => {
+  const passport = new Passport(
+    new Http(new CookieJar(), async () =>
+      Response.json({
+        data: {
+          error_code: 1105,
+          captcha: 'private-challenge-token',
+          desc_url: 'https://example.test/private',
+        },
+      }),
+    ),
+  );
+  await assert.rejects(passport.poll('private-qr-token'), /额外安全验证/);
+  assert.equal(passport.diagnostic?.captcha, true);
+  assert.equal(passport.diagnostic?.descriptionUrl, true);
+  assert.doesNotMatch(JSON.stringify(passport.diagnostic), /private/);
+});
+test('mssdk 编码匹配 PyCryptodome 独立向量，不把旧 Cookie 当作新令牌', async () => {
+  assert.equal(tokenReport('{"k":"中文"}', 42), 'fwOu8k1USpMvszBE6ZlULf==');
+  const jar = new CookieJar();
+  jar.set('msToken', 'stale-token', 'bytedance.com');
+  await assert.rejects(
+    refreshToken(new Http(jar, async () => new Response('{}'))),
+    /未取得抖音会话令牌/,
+  );
+  const http = new Http(
+    jar,
+    async () => new Response('{}', { headers: { 'x-ms-token': 'rotated-token' } }),
+  );
+  await refreshToken(http);
+  assert.equal(jar.get('msToken'), 'rotated-token');
 });

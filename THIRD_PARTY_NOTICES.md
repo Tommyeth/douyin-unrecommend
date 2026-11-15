@@ -2,7 +2,11 @@
 
 `src/protocol/sign.ts` 的 SM3、a_bogus 和 Passport 签名，以及 `src/protocol/login.ts` 的 Passport 参数构建，参考并移植自 [yunsur/douyin-mcp](https://github.com/yunsur/douyin-mcp)，固定参考提交 `7e90d139007f141cb7389aa509d8e6e67f7b5840`。
 
-本项目将相关 Go 代码移植为可在 Cloudflare Workers 执行的 TypeScript，没有引入上游 Go 进程或 HTTP 客户端依赖，仅保留本项目所需域名的签名分支。确定性签名测试向量同样来自该提交。上游许可如下，适用于对应移植部分。
+本项目将相关 Go 代码移植为可在 Cloudflare Workers 执行的 TypeScript，没有引入上游 Go 进程或 HTTP 客户端依赖，仅保留本项目所需域名的签名分支。确定性签名测试向量同样来自该提交。
+
+`src/protocol/ticket.ts` 参考该提交的 `bd_ticket.go`、`passport.go` 和 `api_session.go`，使用 Web Crypto 实现 P-256 / ECDH / HKDF / HMAC 登录凭证交换。`src/protocol/token.ts` 参考 `strdata.go` 和 `mstoken.go`，`src/protocol/device-profile.json` 来自该提交的 `profiles/mstoken_profile.json`。该文件是上游的预设设备档案，不是 Worker 实时渲染或用户设备采集结果。
+
+上游许可如下，适用于对应移植部分。
 
 ```text
 MIT License

@@ -6,13 +6,39 @@ async function main() {
   const token = 'a'.repeat(40);
   const upstream = async (request) => {
     const u = new URL(request.url);
+    if (u.hostname === 'mssdk.bytedance.com' && u.pathname === '/web/r/token')
+      return new Response('{}', { headers: { 'x-ms-token': 'fixture-ms-token' } });
     if (u.pathname === '/')
       return new Response('', {
         headers: {
           'Set-Cookie': 'passport_csrf_token=fixture; Path=/; Domain=.douyin.com; Secure',
         },
       });
-    if (u.pathname === '/ttwid/check/') return Response.json({});
+    if (u.pathname === '/ttwid/union/register/')
+      return Response.json(
+        { status_code: 0 },
+        { headers: { 'Set-Cookie': 'ttwid=fixture; Domain=.bytedance.com; Path=/; Secure' } },
+      );
+    if (u.pathname === '/ttwid/check/') return Response.json({ status_code: 0 });
+    if (u.pathname === '/passport/user_info/get_sec_ts/')
+      return Response.json(
+        { message: 'success' },
+        { headers: { 'bd-ticket-guard-sec-ts': '12345' } },
+      );
+    if (u.pathname === '/service/2/abtest_config/')
+      return new Response(null, { headers: { 'x-ware-csrf-token': '0, ticket-csrf, 0, 0, 0' } });
+    if (u.pathname === '/passport/ticket_guard/get_client_cert/')
+      return Response.json({
+        message: 'success',
+        data: {
+          server_cert:
+            'pub.' +
+            Buffer.from(
+              '046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5',
+              'hex',
+            ).toString('base64'),
+        },
+      });
     if (u.pathname === '/passport/web/get_qrcode/')
       return Response.json({
         data: { token: 'fixture-token', qrcode: 'iVBORw0KGgo=', expire_time: 120 },
