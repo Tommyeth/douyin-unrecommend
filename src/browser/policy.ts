@@ -1,4 +1,4 @@
-import schedule from '../vercel/schedule-policy.json';
+import schedule from '../vercel/schedule-policy.json' with { type: 'json' };
 
 export type BrowserPolicy = {
   runtime: 'vercel-chromium' | 'docker-chromium';
