@@ -1,7 +1,8 @@
 export const hybridUiScript = `
 if(hybridRuntime){
 $('profileRefresh').textContent='核对账号';
-let checking=false,control='';
+let checking=false,control='',timer=null;
+function stopImages(){if(timer)clearInterval(timer);timer=null;}
 function hideLive(){stopImages();clearInterval(clockTimer);$('liveLink').hidden=true;$('sessionClock').hidden=true;}
 function showLive(j){control=j.control||'';const u=new URL(j.url);if(u.protocol!=='https:'||u.hostname!=='live.browser.run')throw Error('登录窗口地址无效');$('liveLink').href=u.href;$('liveLink').hidden=false;sessionEnds=j.expires;$('sessionClock').hidden=false;clearInterval(clockTimer);const tick=()=>{const n=Math.max(0,Math.ceil((sessionEnds-Date.now())/1000));$('sessionClock').textContent='登录窗口剩余 '+Math.floor(n/60)+':'+String(n%60).padStart(2,'0');};tick();clockTimer=setInterval(tick,1000);}
 async function checkHybridLogin(){if(checking)return;checking=true;try{const j=await(await api('login/finish','POST')).json();if(j.ok){hideLive();await status();message('扫码与 Worker 纯协议验证通过，登录态已加密保存。')}else message('等待你在新窗口扫码并完成验证…')}catch(e){if(e.code==='BUSY')return;hideLive();await status().catch(()=>{});message(e.message)}finally{checking=false;}}

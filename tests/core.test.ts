@@ -6,8 +6,7 @@ import { isFeed, parseFeed } from '../src/douyin.js';
 import { sqlite } from '../src/node.js';
 import { Store } from '../src/store.js';
 import { deliver, flush } from '../src/notify.js';
-import { app } from '../src/app.js';
-import { Service } from '../src/service.js';
+import { HybridService } from '../src/hybrid/service.js';
 import { smtp } from '../src/smtp.js';
 import type { Channel, Notice, Snapshot, MailConnect } from '../src/types.js';
 
@@ -239,51 +238,6 @@ test('通知失败保留待发队列并退避，成功不重复发送', async ()
     globalThis.fetch = realFetch;
   }
 });
-test('管理 API 验证口令、同源、模式切换持久化和二维码访问', async () => {
-  const store = new Store(sqlite(':memory:'));
-  const service = new Service(config(env), store, noMail);
-  const web = app(service);
-  assert.equal((await web.request('/api/status')).status, 401);
-  assert.equal((await web.request('/api/login/image')).status, 401);
-  const headers = {
-    Authorization: `Bearer ${env.ADMIN_TOKEN}`,
-    'Content-Type': 'application/json',
-  };
-  assert.equal(
-    (
-      await web.request('/api/settings', {
-        method: 'POST',
-        headers: { ...headers, Origin: 'https://evil.example' },
-        body: '{}',
-      })
-    ).status,
-    403,
-  );
-  assert.equal(
-    (
-      await web.request('/api/settings', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ mode: 'auto_cancel', interval: 60 }),
-      })
-    ).status,
-    200,
-  );
-  const s = await new Service(config(env), store, noMail).status();
-  assert.equal(s.mode, 'auto_cancel');
-  assert.equal(s.interval, 60);
-  assert.equal(
-    (
-      await web.request('/api/settings', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ mode: 'auto_cancel', interval: 0 }),
-      })
-    ).status,
-    400,
-  );
-});
-
 test('仅提醒模式不取消；自动模式处理已发现的记录并尊重单批上限', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 204 })) as typeof fetch;
@@ -299,7 +253,7 @@ test('仅提醒模式不取消；自动模式处理已发现的记录并尊重�
         ]),
       });
       const store = new Store(sqlite(':memory:'));
-      const service = new Service(cfg, store, noMail);
+      const service = new HybridService(cfg, store, noMail);
       let cancels = 0;
       const videos = [video, { ...video, id: '1002' }, { ...video, id: '1003' }];
       const fakeBot = {
@@ -331,7 +285,7 @@ test('通知失败在未登录时也能随调度重试', async () => {
     ]),
   });
   await store.enqueue(notice, ['test']);
-  const service = new Service(cfg, store, noMail);
+  const service = new HybridService(cfg, store, noMail);
   const realFetch = globalThis.fetch;
   try {
     globalThis.fetch = (async () => new Response(null, { status: 204 })) as typeof fetch;

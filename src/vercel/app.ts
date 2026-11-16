@@ -52,7 +52,7 @@ export function vercelApp(
     );
     await next();
   });
-  api.get('/', (c) => c.html(renderHtml(true, policy)));
+  api.get('/', (c) => c.html(renderHtml(policy)));
   api.get('/healthz', (c) => c.json({ ok: true, runtime: policy.runtime }));
   api.use('/api/*', async (c, next) => {
     const auth = c.req.header('Authorization') ?? '';

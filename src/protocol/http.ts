@@ -1,6 +1,5 @@
 import { SafeError } from '../types.js';
 import { UA } from './sign.js';
-import type { TicketGuard } from './ticket.js';
 export type Cookie = {
   name: string;
   value: string;
@@ -90,7 +89,6 @@ const HOSTS = new Set([
   'mssdk.bytedance.com',
 ]);
 export class Http {
-  guard?: TicketGuard;
   constructor(
     public jar = new CookieJar(),
     public transport: typeof fetch = fetch,
@@ -107,7 +105,7 @@ export class Http {
       url.password ||
       url.port
     )
-      throw new SafeError('UPSTREAM_HOST', '拒绝向非登录协议域名发送请求。');
+      throw new SafeError('UPSTREAM_HOST', '拒绝向未允许的抖音协议域名发送请求。');
     const headers = new Headers({
       'User-Agent': this.userAgent,
       Accept: 'application/json, text/plain, */*',
@@ -116,7 +114,6 @@ export class Http {
       Origin: 'https://www.douyin.com',
     });
     new Headers(init.headers).forEach((v, k) => headers.set(k, v));
-    await this.guard?.sync(this.jar);
     headers.set('Cookie', this.jar.header(url));
     try {
       const transport = this.transport;
@@ -131,7 +128,6 @@ export class Http {
       this.jar.absorb(url, r.headers.getSetCookie());
       const ms = r.headers.get('x-ms-token');
       if (ms && ms.length <= 2048 && !/[;\s]/.test(ms)) this.jar.set('msToken', ms);
-      this.guard?.absorb(r);
       return r;
     } catch (e) {
       if (e instanceof SafeError) throw e;
@@ -153,21 +149,5 @@ export class Http {
         502,
       );
     }
-  }
-  async redirects(raw: string) {
-    let url = raw;
-    for (let i = 0; i < 8; i++) {
-      const r = await this.request(url);
-      await r.body?.cancel();
-      if (r.status >= 300 && r.status < 400) {
-        const loc = r.headers.get('location');
-        if (!loc) throw new SafeError('LOGIN_REDIRECT', '登录跳转缺少地址。');
-        url = new URL(loc, url).toString();
-      } else {
-        if (r.status !== 200) throw new SafeError('LOGIN_REDIRECT', '登录跳转失败。');
-        return;
-      }
-    }
-    throw new SafeError('LOGIN_REDIRECT', '登录跳转次数过多。');
   }
 }

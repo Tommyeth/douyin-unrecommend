@@ -97,11 +97,11 @@ npx wrangler secret put NOTIFICATIONS_JSON --config wrangler.hybrid.jsonc
 
 配置通知时先从 `wrangler.hybrid.jsonc` 的 `vars` 中删除同名 `NOTIFICATIONS_JSON`，再部署并写入 Secret，避免同名变量冲突。SMTP 使用隐式 TLS 465，不支持 25 或 STARTTLS 587。可以通过面板「测试通知」检查投递。
 
-## 资源和费用
+## 资源与套餐
 
 本架构使用 Worker、Cron、D1、Browser Run；不需要 KV、R2、Durable Objects 或外部数据库。Browser Run 只在扫码和人工验证期间运行，空闲等待扫码也计入浏览器时长。
 
-截至 2026-11-16，Workers Paid 起价 $5/月；Browser Run Paid 包含每月 10 小时浏览器用量，超出按 $0.09/小时计费，另有并发额度规则。具体以 [Workers 定价](https://developers.cloudflare.com/workers/platform/pricing/) 与 [Browser Run 定价](https://developers.cloudflare.com/browser-run/pricing/) 为准。15 分钟周期在 31 天约触发 2976 次；每轮分页、取消后的复核及通知会产生额外请求和数据库操作。
+**是否免费：否，需要 Workers Paid。** 浏览器及其他资源超出套餐额度时另计用量。15 分钟周期在 31 天约触发 2976 次；每轮分页、取消后的复核及通知会产生额外请求和数据库操作。
 
 Browser Run 登录成功不意味着协议请求一定获准：两条路径的出口 IP、TLS 和运行环境不同。浏览器保存的 Cookie、UA、参数和签名只能满足部分请求条件，不能保证规避平台限制。项目不会把空响应或错误响应当成「推荐列表为空」。
 
@@ -127,4 +127,4 @@ npm run test:hybrid
 
 `/api/status`（需要管理口令）返回最近协议阶段、HTTP 状态、错误码和最近一次 Cron 执行记录，不返回 Cookie 或签名。`/api/runtime` 返回 Browser Run 当前配额。部署错误 `100328` 表示当前账号仍是 Workers Free，需切换到正确的 Paid 账号。
 
-旧的 `src/worker.ts` / `wrangler.jsonc` 是实验性的纯协议扫码版本。混合版入口是 `src/hybrid/worker.ts` / `wrangler.hybrid.jsonc`，请勿混用数据库与登录态。
+部署入口为 `src/hybrid/worker.ts`，配置文件为 `wrangler.hybrid.jsonc`。

@@ -1,16 +1,14 @@
-# 部署可行性与费用选择
+# 部署可行性
 
 核对日期：2026-11-16。这里比较本项目已有实现；平台能启动容器或浏览器，不等于抖音账号在那个出口已通过验证。
 
-| 选择                                           | 适合的情况                                | 资源与边界                                                                                                                                |
-| ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| [Vercel 混合版](vercel.md)                     | 不维护服务器，低频个人使用                | Functions + Private Blob + Schedules；仅登录启动 Chromium。默认实际检查一小时，可选 15 分钟，但 Blob 免费写入额度不足以持续整月运行该频率 |
-| [Cloudflare Paid 混合版](cloudflare-hybrid.md) | 不维护服务器，希望每 15 分钟检查          | Worker + Cron + D1 + Browser Run；浏览器只用于登录，基础套餐 $5/月起，另看资源超额用量。扫码等待也算浏览器时间                            |
-| [VPS Docker](docker.md)                        | 已有服务器，重视直接键鼠操作或 5 分钟间隔 | 持久磁盘、足够内存、长期运行进程、HTTP/WebSocket 入口。费用按 VPS 提供商；本项目不收软件订阅费                                            |
-| [Dots 直控](dots.md)                           | 希望通过对话操作网页，愿意验收实验流程    | 依赖宿主的云浏览器、可保存状态的目录和实际定时能力；不是可任意部署 Docker 的 VPS 承诺                                                     |
-| [纯协议实验版](pure-protocol.md)               | 研究无浏览器登录                          | 真实扫码登录仍未完成验收，增加 Worker CPU 额度不等于获得完整 Chromium                                                                     |
+| 选择                                           | 是否免费                                               | 适合的情况与资源                                                                 |
+| ---------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| [Vercel 混合版](vercel.md)                     | 可免费低频使用；持续每 15 分钟检查会超出 Blob 免费额度 | 无需服务器；Functions + Private Blob + Schedules，仅登录启动 Chromium            |
+| [Cloudflare Paid 混合版](cloudflare-hybrid.md) | 否，需要 Workers Paid                                  | 无需服务器；Worker + Cron + D1 + Browser Run，浏览器只用于登录                   |
+| [VPS Docker](docker.md)                        | 软件免费，需自备服务器                                 | 适合直接键鼠操作或 5 分钟间隔；需要持久磁盘、足够内存、长期进程与 WebSocket 入口 |
 
-费用来源：[Vercel](https://vercel.com/pricing)、[Blob](https://vercel.com/docs/vercel-blob/usage-and-pricing)、[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、[Browser Run](https://developers.cloudflare.com/browser-run/pricing/)。各平台资源是否够用应以实际账单和控制台计量为准。
+[Dots 直控](dots.md) 是独立的实验工作流，通过对话操作宿主云浏览器；需要可保存状态的目录与实际可用的定时功能，尚未完成云端验收。
 
 ## Vercel 的两种定时入口
 

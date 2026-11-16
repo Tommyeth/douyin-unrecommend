@@ -1,6 +1,6 @@
 # VPS Docker 部署
 
-自备 Linux VPS，使用真实 Chromium 处理登录和日常任务；内置 noVNC，可直接操作远端浏览器。项目无软件订阅费，费用取决于 VPS、存储和流量；已有服务器可复用。
+自备 Linux VPS，使用真实 Chromium 处理登录和日常任务；内置 noVNC，可直接操作远端浏览器。软件免费，需自备服务器；已有 VPS 可复用。
 
 容器集成测试已覆盖真实 Chromium、noVNC 输入和模拟登录。具体 VPS 的抖音网络与真实账号仍需自行验收；这次 Vercel 的纯协议改造不改变 Docker 执行方式。
 

@@ -228,7 +228,7 @@ test('提醒模式不取消；无通知配置时给出明确错误；15 分钟�
 });
 
 test('混合面板脚本可解析，使用原生 Live View 且标明纯协议路径', () => {
-  const html = renderHtml(true, hybridPolicy);
+  const html = renderHtml(hybridPolicy);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)![1];
   new vm.Script(script);
   assert.match(html, /live\.browser\.run/);
