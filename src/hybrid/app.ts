@@ -30,7 +30,7 @@ export function hybridApp(
     );
     await next();
   });
-  api.get('/', (c) => c.html(renderHtml(true, hybridPolicy)));
+  api.get('/', (c) => c.html(renderHtml(hybridPolicy)));
   api.get('/healthz', (c) => c.json({ ok: true, runtime: 'cloudflare-hybrid' }));
   api.use('/api/*', async (c, next) => {
     const auth = c.req.header('Authorization') ?? '';

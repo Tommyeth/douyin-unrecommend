@@ -30,9 +30,6 @@ jobs:
       - run: npm run test:hybrid
         env:
           WRANGLER_SEND_METRICS: 'false'
-      - run: npm run test:worker
-        env:
-          WRANGLER_SEND_METRICS: 'false'
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20

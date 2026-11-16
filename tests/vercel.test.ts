@@ -1,4 +1,4 @@
-import { vercelPolicy } from '../src/browser/policy.js';
+import { vercelPolicy, vercelHybridPolicy, dockerPolicy } from '../src/browser/policy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Script } from 'node:vm';
@@ -13,6 +13,7 @@ import {
   type StateBackend,
 } from '../src/vercel/state.js';
 import { renderHtml } from '../src/ui.js';
+import { hybridPolicy } from '../src/hybrid/app.js';
 import { vercelApp as createVercelApp, scheduledPoll } from '../src/vercel/app.js';
 import { SafeError } from '../src/types.js';
 import { BrowserService } from '../src/browser/service.js';
@@ -265,9 +266,9 @@ test('Vercel TLS 终止后允许生产页同源请求，拒绝其他域名或降
     assert.equal(response.status, code);
   }
 });
-test('两种管理页脚本可解析，Vercel 内存 schema 与迁移一致', () => {
-  for (const browser of [false, true])
-    new Script(renderHtml(browser).match(/<script>([\s\S]*?)<\/script>/)![1]);
+test('各部署管理页脚本可解析，Vercel 内存 schema 与迁移一致', () => {
+  for (const policy of [vercelPolicy, vercelHybridPolicy, dockerPolicy, hybridPolicy])
+    new Script(renderHtml(policy).match(/<script>([\s\S]*?)<\/script>/)![1]);
   assert.equal(
     schema,
     readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'),
