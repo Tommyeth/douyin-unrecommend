@@ -1,4 +1,5 @@
 node_modules/
+src/generated/
 .venv/
 uv.lock
 dist/
@@ -19,3 +20,7 @@ auth.json
 storage-state.json
 screenshots/
 .DS_Store
+
+.vercel/
+public/LICENSE.txt
+assets/fonts/*.otf

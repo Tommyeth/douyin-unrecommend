@@ -52,6 +52,7 @@ export async function flush(
   channels: Channel[],
   connect: MailConnect,
   now = Date.now(),
+  deadline = Infinity,
 ) {
   const rows = await store.db.all<{
     id: string;
@@ -65,6 +66,8 @@ export async function flush(
   let sent = 0,
     failed = 0;
   for (const row of rows) {
+    // Reserve up to 30 seconds for SMTP connect + transaction. Leave remaining rows queued.
+    if (Date.now() + 32000 > deadline) break;
     const channel = channels.find((c) => c.name === row.channel);
     if (!channel) continue;
     try {

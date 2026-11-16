@@ -70,7 +70,7 @@ export function config(env: Record<string, unknown>): Config {
     channels,
     ignoreIds,
     mode: mode as Mode,
-    interval: number('POLL_INTERVAL_SECONDS', 300, 60, 86400),
+    interval: number('POLL_INTERVAL_SECONDS', 3600, 60, 86400),
     maxPages: number('MAX_PAGES', 10, 1, 100),
     maxActions: number('MAX_ACTIONS', 5, 1, 50),
     actionDelay: number('ACTION_DELAY_MS', 3000, 1000, 30000),

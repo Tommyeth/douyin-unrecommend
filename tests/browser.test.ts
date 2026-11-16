@@ -1,14 +1,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chromium, type BrowserContext } from 'playwright';
+import { chromium, type BrowserContext } from 'playwright-core';
 import { config } from '../src/config.js';
-import { Douyin, FEED, CANCEL, cancelURL } from '../src/douyin.js';
+import { Douyin, FEED, CANCEL, cancelURL, prepareLogin } from '../src/browser/douyin.js';
 
 const cfg = config({
   ADMIN_TOKEN: 'a'.repeat(40),
   AUTH_SECRET: 'b'.repeat(40),
   PAGE_TIMEOUT_MS: '5000',
   ACTION_DELAY_MS: '1000',
+});
+test('登录页面已可操作时不等待缓慢的次要资源', { timeout: 10000 }, async () => {
+  const browser = await chromium.launch();
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const context = await browser.newContext();
+    await context.route('**/*', async (route) => {
+      if (new URL(route.request().url()).pathname === '/slow.js') {
+        await slow;
+        await route.fulfill({ contentType: 'text/javascript', body: '' }).catch(() => {});
+      } else
+        await route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: '<button>登录</button><script defer src="/slow.js"></script>',
+        });
+    });
+    const page = await prepareLogin(context);
+    assert.notEqual(await page.evaluate(() => document.readyState), 'complete');
+    assert.equal(await page.getByText('登录', { exact: true }).isVisible(), true);
+  } finally {
+    release();
+    await browser.close();
+  }
 });
 async function fixture(
   context: BrowserContext,
@@ -19,11 +45,17 @@ async function fixture(
     pagination?: boolean;
     wrongTab?: boolean;
     ssr?: boolean;
+    slowResource?: Promise<void>;
   } = {},
 ) {
   const requests: URLSearchParams[] = [];
   await context.route('**/*', async (route) => {
     const u = new URL(route.request().url());
+    if (u.pathname === '/slow.js' && options.slowResource) {
+      await options.slowResource;
+      await route.fulfill({ contentType: 'text/javascript', body: '' }).catch(() => {});
+      return;
+    }
     if (u.pathname === FEED) {
       const all = [...ids];
       const next = u.searchParams.has('next');
@@ -53,7 +85,7 @@ async function fixture(
     if (u.pathname === '/user/self') {
       await route.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: `<div id="user_detail_element"><div data-e2e="user-info">测试账号 抖音号：fixture</div><button id="semiTablike">喜欢</button><button id="semiTabrecommend" aria-selected="${options.wrongTab ? 'false' : 'true'}">推荐</button><div style="overflow-y:auto;height:100px" id="scroll"><div data-e2e="user-like-list"><ul data-e2e="scroll-list" style="height:800px"></ul></div></div></div><script>${options.ssr ? '' : `fetch('${FEED}?aid=6383');`}document.querySelector('#semiTabrecommend').onclick=()=>fetch('${FEED}?aid=6383');document.querySelector('#scroll').onscroll=()=>fetch('${FEED}?aid=6383&next=1');</script>`,
+        body: `<div id="user_detail_element"><div data-e2e="user-info">测试账号 抖音号：fixture</div><button id="semiTablike">喜欢</button><button id="semiTabrecommend" aria-selected="${options.wrongTab ? 'false' : 'true'}">推荐</button><div style="overflow-y:auto;height:100px" id="scroll"><div data-e2e="user-like-list"><ul data-e2e="scroll-list" style="height:800px"></ul></div></div></div><script>${options.ssr ? '' : `fetch('${FEED}?aid=6383');`}document.querySelector('#semiTabrecommend').onclick=()=>fetch('${FEED}?aid=6383');document.querySelector('#scroll').onscroll=()=>fetch('${FEED}?aid=6383&next=1');</script>${options.slowResource ? '<script defer src="/slow.js"></script>' : ''}`,
       });
       return;
     }
@@ -98,6 +130,26 @@ test('首屏没有网络接口时切换标签，获取实时列表', async () =>
     await fixture(context, new Set(['101']), { ssr: true });
     assert.equal((await new Douyin(await context.newPage(), cfg).scan()).videos[0].id, '101');
   } finally {
+    await browser.close();
+  }
+});
+test('推荐接口已返回时，慢资源不阻塞读取及取消后的复核', { timeout: 15000 }, async () => {
+  const browser = await chromium.launch();
+  let release!: () => void;
+  const slowResource = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const context = await browser.newContext();
+    await fixture(context, new Set(['101']), { slowResource });
+    const page = await context.newPage();
+    const bot = new Douyin(page, cfg);
+    const snapshot = await bot.scan();
+    assert.equal(snapshot.videos.length, 1);
+    assert.notEqual(await page.evaluate(() => document.readyState), 'complete');
+    assert.equal((await bot.cancel(snapshot.videos[0])).videos.length, 0);
+  } finally {
+    release();
     await browser.close();
   }
 });

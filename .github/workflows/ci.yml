@@ -14,9 +14,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: npm run check
+      - run: npm run build:vercel
+      - run: npx playwright-core install --with-deps chromium
       - run: npm test
-      - run: npm run build:worker
+      - run: npm run test:worker
         env:
           WRANGLER_SEND_METRICS: "false"
