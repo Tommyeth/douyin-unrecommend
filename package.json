@@ -27,6 +27,7 @@
     "dev:vercel": "tsx --env-file=.env.local src/vercel/local.ts",
     "test:browser": "tsx --test tests/browser.test.ts",
     "build:desktop": "node scripts/build-desktop.mjs",
+    "build:dots": "python3 scripts/package-dots.py",
     "start:protocol": "node scripts/prepare-wasm.mjs && tsx src/protocol-server.ts",
     "schedule:vercel": "node scripts/configure-vercel-schedule.mjs"
   },

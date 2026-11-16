@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "douyin-dots",
+  "version": "0.1.0",
+  "description": "由 Dots 云浏览器直接管理自己的抖音推荐，支持新增提醒与自动取消，无外部后台。",
+  "author": { "name": "Tommyeth" },
+  "repository": "https://github.com/Tommyeth/douyin-unrecommend",
+  "license": "MIT"
+}

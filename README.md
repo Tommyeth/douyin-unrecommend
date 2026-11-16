@@ -4,6 +4,8 @@
 
 提供两种部署：**Vercel** 无需自备服务器；**VPS Docker** 自带 Chromium 和 noVNC，可直接在面板里操作浏览器。一个部署管理一个抖音账号。
 
+另提供实验性的 **[Dots 云浏览器直控版](docs/dots.md)**：由 Dot 自己打开抖音网页、扫码、读取并点击取消，无需以上后台。含中文技能包、提醒/自动取消模式与跨轮状态记录；真实 Dots 云端登录、取消和定时执行仍待验收，不能把技能包已生成当成任务已运行。
+
 连接面板后，运行概况会显示当前管理账号的**头像、昵称、抖音号和资料确认时间**。扫码成功、定时检查时自动更新，也可以点击「更新账号资料」单独读取；旧版保存的登录态无需重新扫码。资料与登录态一起加密保存，仅凭管理员口令可读取。若检测到登录失效，面板会提示重新登录，保留最近确认的账号资料供核对。
 
 |                 | Vercel                                 | VPS Docker                                     |
@@ -267,5 +269,6 @@ npm run test:worker
 - 本地 Node：配置 `.env` 后运行 `npm run dev`；默认无桌面。如自行提供 Xvfb/x11vnc，可设 `DESKTOP_ENABLED=1`。
 - Vercel 本地：`vercel env pull .env.local` 后运行 `npm run dev:vercel`，默认 `127.0.0.1:8791`；请连接开发用私有 Blob。
 - 原纯协议 Cloudflare Worker / Node 保留为实验路径，未通过真实登录整体验收，见 [纯协议说明](docs/pure-protocol.md)。Docker 默认已改用 Chromium；纯协议 Node 入口是 `npm run start:protocol`。
+- Dots 直控版使用宿主云浏览器和已保存的定时任务，不访问现有管理 API。构建包用 `npm run build:dots`，验证状态逻辑用 `python3 tests/dots_state_test.py`，详见 [使用与验收](docs/dots.md)。
 
 公开反馈请去除账号、验证码及 Cookie。许可证 [MIT](LICENSE)，依赖许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。本项目与抖音/字节跳动无隶属关系。
