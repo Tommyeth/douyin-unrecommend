@@ -78,6 +78,13 @@ export function vercelApp(
     const { mode, interval } = await c.req.json();
     return c.json(await change((s) => s.setSettings(mode, interval)));
   });
+  api.post('/api/account/refresh', async (c) => c.json(await change((s) => s.refreshProfile())));
+  api.get('/api/account/avatar', async (c) => {
+    const avatar = await readState(backend!, (store) => service(store).avatar());
+    return c.body(new Uint8Array(Buffer.from(avatar.data, 'base64')), 200, {
+      'Content-Type': avatar.mime,
+    });
+  });
   api.post('/api/poll', async (c) => c.json(await change((s) => s.poll())));
   api.post('/api/clear/preview', async (c) => c.json(await change((s) => s.preview())));
   api.post('/api/clear', async (c) => {

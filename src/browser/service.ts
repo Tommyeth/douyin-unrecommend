@@ -1,10 +1,16 @@
-import type { Browser, BrowserContext } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { Workflow, type RecommendationClient } from '../workflow.js';
-import { seal, unseal } from '../crypto.js';
+import { digest, seal, unseal } from '../crypto.js';
 import { SafeError, type MailConnect } from '../types.js';
 import type { Config } from '../config.js';
 import type { Store } from '../store.js';
-import { Douyin, identity, prepareLogin, sleep } from './douyin.js';
+import { Douyin, prepareLogin, sleep } from './douyin.js';
+import {
+  readAccount,
+  captureProfile,
+  type AccountIdentity,
+  type AccountProfile,
+} from './profile.js';
 import { launchBrowser, type LaunchBrowser } from './launch.js';
 import { flush } from '../notify.js';
 import { applyLoginInput, type LoginControl } from './input.js';
@@ -41,6 +47,57 @@ export class BrowserService extends Workflow {
   }
   protected flushNotifications() {
     return flush(this.store, this.cfg.channels, this.mail, Date.now(), this.notificationDeadline);
+  }
+  private async storedProfile(): Promise<AccountProfile | null> {
+    const raw = await this.store.get('account_profile');
+    if (!raw) return null;
+    const profile = JSON.parse(raw) as AccountProfile;
+    const account = await this.store.get('account');
+    if (
+      !account ||
+      profile.account !== account ||
+      typeof profile.douyinId !== 'string' ||
+      (await digest(profile.douyinId)) !== account
+    )
+      return null;
+    return profile;
+  }
+  private async updateProfile(page: Page, owner: AccountIdentity) {
+    if ((await this.store.get('account')) !== owner.account)
+      throw new SafeError('ACCOUNT_CHANGED', '登录账号与已绑定账号不同，请使用原账号重新扫码。');
+    const profile = await captureProfile(page, owner, await this.storedProfile());
+    await this.store.set('account_profile', JSON.stringify(profile));
+  }
+  async status() {
+    const status = await super.status();
+    const profile = await this.storedProfile();
+    return {
+      ...status,
+      profile: profile
+        ? {
+            douyinId: profile.douyinId,
+            nickname: profile.nickname,
+            updatedAt: profile.updatedAt,
+            hasAvatar: !!profile.avatar,
+          }
+        : null,
+    };
+  }
+  async avatar() {
+    const profile = await this.storedProfile();
+    if (!profile?.avatar)
+      throw new SafeError('AVATAR_MISSING', '账号头像尚未读取，请更新账号资料。', 404);
+    return profile.avatar;
+  }
+  async refreshProfile() {
+    return this.store.lock(async () => {
+      await this.withClient(async (client) => {
+        if (!client.refreshAccount)
+          throw new SafeError('PROFILE_UNAVAILABLE', '当前运行方式不支持读取账号资料。');
+        await client.refreshAccount();
+      });
+      return { profile: (await this.status()).profile };
+    });
   }
   async setSettings(mode: unknown, interval: unknown) {
     if (
@@ -116,13 +173,14 @@ export class BrowserService extends Workflow {
         }
         if (command?.cancelled) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
         phase = 'login_identity';
-        let account: string | undefined;
+        let owner: AccountIdentity | undefined;
         try {
-          account = await identity(page, 100);
+          owner = await readAccount(page, 100);
         } catch (e) {
           if (!(e instanceof SafeError) || e.code !== 'LOGIN_REQUIRED') throw e;
         }
-        if (account) {
+        if (owner) {
+          const account = owner.account;
           phase = 'save_session';
           const bound = await this.store.get('account');
           if (bound && bound !== account)
@@ -133,6 +191,7 @@ export class BrowserService extends Workflow {
             await seal({ version: 'chromium-1', state }, this.cfg.authSecret),
           );
           await this.store.set('account', account);
+          await this.updateProfile(page, owner);
           await this.store.delete('error');
           await this.store.delete('login_diagnostic');
           await this.store.delete('next_poll');
@@ -263,7 +322,9 @@ export class BrowserService extends Workflow {
       return await Promise.race([
         (async () => {
           context = await this.context(browser, saved.state);
-          const bot = new Douyin(await context.newPage(), this.cfg);
+          const bot = new Douyin(await context.newPage(), this.cfg, (page, owner) =>
+            this.updateProfile(page, owner),
+          );
           try {
             const result = await fn(bot);
             await this.store.delete('browser_diagnostic');

@@ -5,6 +5,7 @@ import { SafeError, safeError, type MailConnect, type Snapshot, type Video } fro
 export interface RecommendationClient {
   scan(): Promise<Snapshot>;
   cancel(video: Video): Promise<Snapshot>;
+  refreshAccount?(): Promise<void>;
 }
 type Login = { expires: number };
 type Plan = { token: string; ids: string[]; expires: number };
