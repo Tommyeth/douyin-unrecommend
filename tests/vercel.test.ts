@@ -188,7 +188,7 @@ test('计划时间避免 15 分钟抖动导致每小时任务被跳过', async (
   await s.poll(true, hour + 3600000);
   assert.equal(calls, 2);
 });
-test('Vercel API 鉴权、整小时间隔和状态持久化', async () => {
+test('Vercel API 鉴权、调度间隔限制和状态持久化', async () => {
   const b = backend();
   const api = vercelApp(env, b);
   assert.equal((await api.request('/api/status')).status, 401);

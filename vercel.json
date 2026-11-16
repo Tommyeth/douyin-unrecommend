@@ -12,17 +12,30 @@
     "api/hourly.ts": {
       "maxDuration": 300,
       "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,assets/fonts/**}",
-      "experimentalTriggers": [{ "type": "schedule/v1beta" }]
+      "experimentalTriggers": [
+        {
+          "type": "schedule/v1beta"
+        }
+      ]
     }
   },
   "rewrites": [
-    { "source": "/", "destination": "/api/index" },
-    { "source": "/api/:path*", "destination": "/api/index" },
-    { "source": "/healthz", "destination": "/api/index" }
+    {
+      "source": "/",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/healthz",
+      "destination": "/api/index"
+    }
   ],
   "schedules": {
     "douyin-hourly": {
-      "schedule": "0 * * * *",
+      "schedule": "*/15 * * * *",
       "timezone": "UTC",
       "jitter": 15,
       "function": "api/hourly"

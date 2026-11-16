@@ -1,0 +1,5 @@
+{
+  "triggerSeconds": 900,
+  "minimumInterval": 900,
+  "intervalStep": 900
+}

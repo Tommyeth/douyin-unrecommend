@@ -3,8 +3,8 @@ import { chromium, type Browser } from 'playwright-core';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-export type LaunchBrowser = () => Promise<Browser>;
-export const launchBrowser: LaunchBrowser = async () => {
+export type LaunchBrowser = (options?: { headed?: boolean }) => Promise<Browser>;
+export const launchBrowser: LaunchBrowser = async (options) => {
   const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH;
   const serverPath = process.env.VERCEL ? await serverChromium.executablePath() : undefined;
   if (process.env.VERCEL) {
@@ -16,8 +16,8 @@ export const launchBrowser: LaunchBrowser = async () => {
   }
   return chromium.launch({
     executablePath: executablePath || serverPath,
-    args: process.env.VERCEL ? serverChromium.args : [],
-    headless: true,
+    args: process.env.VERCEL ? serverChromium.args : ['--window-position=0,0'],
+    headless: !options?.headed,
     timeout: 30000,
   });
 };

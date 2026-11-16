@@ -8,6 +8,7 @@ import { Douyin, identity, prepareLogin, sleep } from './douyin.js';
 import { launchBrowser, type LaunchBrowser } from './launch.js';
 import { flush } from '../notify.js';
 import { applyLoginInput, type LoginControl } from './input.js';
+import { vercelPolicy, type BrowserPolicy } from './policy.js';
 
 type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type LoginEvent = {
@@ -28,12 +29,13 @@ export class BrowserService extends Workflow {
     store: Store,
     mail: MailConnect,
     private launch: LaunchBrowser = launchBrowser,
+    private policy: BrowserPolicy = vercelPolicy,
   ) {
     super(cfg, store, mail);
-    if (cfg.interval < 3600 || cfg.interval % 3600)
+    if (cfg.interval < policy.minimumInterval || cfg.interval % policy.intervalStep)
       throw new SafeError(
         'SETTINGS',
-        'Vercel 版 POLL_INTERVAL_SECONDS 必须为 1–24 个整小时。',
+        `当前部署的检测间隔至少 ${policy.minimumInterval} 秒，按 ${policy.intervalStep} 秒递增。`,
         400,
       );
   }
@@ -41,8 +43,16 @@ export class BrowserService extends Workflow {
     return flush(this.store, this.cfg.channels, this.mail, Date.now(), this.notificationDeadline);
   }
   async setSettings(mode: unknown, interval: unknown) {
-    if (typeof interval !== 'number' || interval < 3600 || interval % 3600)
-      throw new SafeError('SETTINGS', 'Vercel 版检测间隔为 1–24 个整小时。', 400);
+    if (
+      typeof interval !== 'number' ||
+      interval < this.policy.minimumInterval ||
+      interval % this.policy.intervalStep
+    )
+      throw new SafeError(
+        'SETTINGS',
+        `当前部署的检测间隔至少 ${this.policy.minimumInterval} 秒，按 ${this.policy.intervalStep} 秒递增。`,
+        400,
+      );
     return super.setSettings(mode, interval);
   }
   private async context(browser: Browser, storageState?: StorageState) {
@@ -57,7 +67,7 @@ export class BrowserService extends Workflow {
     return context;
   }
   async login(signal: AbortSignal, emit: (event: LoginEvent) => void, control?: LoginControl) {
-    const expires = Date.now() + 235000;
+    const expires = Date.now() + this.policy.loginTimeout;
     emit({ type: 'waiting', expires });
     let browser: Browser | undefined;
     let phase = 'browser_start';
@@ -68,11 +78,11 @@ export class BrowserService extends Workflow {
     const timer = setTimeout(() => {
       timedOut = true;
       close();
-    }, 240000);
+    }, this.policy.loginTimeout + 5000);
     signal.addEventListener('abort', close, { once: true });
     try {
       signal.throwIfAborted();
-      browser = await this.launch();
+      browser = await this.launch({ headed: this.policy.desktop });
       phase = 'browser_context';
       const context = await this.context(browser);
       phase = 'login_page';
@@ -245,7 +255,7 @@ export class BrowserService extends Workflow {
       throw new SafeError('AUTH_DECRYPT', '登录态无法解密，请检查 AUTH_SECRET。');
     }
     if (saved.version !== 'chromium-1')
-      throw new SafeError('LOGIN_REQUIRED', '请使用 Vercel 管理页重新扫码。');
+      throw new SafeError('LOGIN_REQUIRED', '请使用管理页重新扫码。');
     const browser = await this.launch();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let context: BrowserContext | undefined;
