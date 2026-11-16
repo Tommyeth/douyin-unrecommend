@@ -3,7 +3,8 @@ import { SafeError } from '../types.js';
 
 type Action =
   | { action: 'click'; x: number; y: number }
-  | { action: 'text'; text: string }
+  | { action: 'text'; text: string; submit?: boolean }
+  | { action: 'check' }
   | { action: 'key'; key: 'Enter' | 'Tab' | 'Backspace' | 'Escape' };
 export type LoginInput = { session: string; id: string; frame: string } & Action;
 export type LoginControl = {
@@ -17,6 +18,7 @@ export function parseLoginInput(raw: unknown): LoginInput {
   if (!uuid(c.session) || !uuid(c.id) || !uuid(c.frame))
     throw new SafeError('INPUT', '验证操作缺少会话或画面编号。', 400);
   const base = { session: c.session, id: c.id, frame: c.frame };
+  if (c.action === 'check') return { ...base, action: 'check' };
   if (
     c.action === 'click' &&
     typeof c.x === 'number' &&
@@ -36,13 +38,22 @@ export function parseLoginInput(raw: unknown): LoginInput {
     c.text.length <= 128 &&
     !/[\x00-\x1f\x7f]/.test(c.text)
   )
-    return { ...base, action: 'text', text: c.text };
+    return {
+      ...base,
+      action: 'text',
+      text: c.text,
+      ...(c.submit === true ? { submit: true } : {}),
+    };
   if (c.action === 'key' && ['Enter', 'Tab', 'Backspace', 'Escape'].includes(String(c.key)))
     return { ...base, action: 'key', key: c.key as 'Enter' | 'Tab' | 'Backspace' | 'Escape' };
   throw new SafeError('INPUT', '仅支持画面点击、最多 128 字符文本及指定按键。', 400);
 }
-export async function applyLoginInput(page: Page, input: LoginInput, frame: string) {
-  if (input.frame !== frame)
+export async function applyLoginInput(
+  page: Page,
+  input: LoginInput,
+  frame: string | ReadonlySet<string>,
+) {
+  if (typeof frame === 'string' ? input.frame !== frame : !frame.has(input.frame))
     throw new SafeError('INPUT_STALE', '画面已更新，请在新画面上重新操作。');
   const url = new URL(page.url());
   if (
@@ -57,6 +68,13 @@ export async function applyLoginInput(page: Page, input: LoginInput, frame: stri
       Math.min(size.width - 1, input.x * size.width),
       Math.min(size.height - 1, input.y * size.height),
     );
-  } else if (input.action === 'text') await page.keyboard.insertText(input.text);
-  else await page.keyboard.press(input.key);
+  } else if (input.action === 'text') {
+    await page.keyboard.insertText(input.text);
+    if (input.submit) await page.keyboard.press('Enter');
+  } else if (input.action === 'check') {
+    await page.goto('https://www.douyin.com/user/self?from_tab_name=main&showTab=recommend', {
+      waitUntil: 'commit',
+      timeout: 15000,
+    });
+  } else await page.keyboard.press(input.key);
 }

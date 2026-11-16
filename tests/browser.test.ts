@@ -2,13 +2,39 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium, type BrowserContext } from 'playwright-core';
 import { config } from '../src/config.js';
-import { Douyin, FEED, CANCEL, cancelURL } from '../src/browser/douyin.js';
+import { Douyin, FEED, CANCEL, cancelURL, prepareLogin } from '../src/browser/douyin.js';
 
 const cfg = config({
   ADMIN_TOKEN: 'a'.repeat(40),
   AUTH_SECRET: 'b'.repeat(40),
   PAGE_TIMEOUT_MS: '5000',
   ACTION_DELAY_MS: '1000',
+});
+test('登录页面已可操作时不等待缓慢的次要资源', { timeout: 10000 }, async () => {
+  const browser = await chromium.launch();
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const context = await browser.newContext();
+    await context.route('**/*', async (route) => {
+      if (new URL(route.request().url()).pathname === '/slow.js') {
+        await slow;
+        await route.fulfill({ contentType: 'text/javascript', body: '' }).catch(() => {});
+      } else
+        await route.fulfill({
+          contentType: 'text/html; charset=utf-8',
+          body: '<button>登录</button><script defer src="/slow.js"></script>',
+        });
+    });
+    const page = await prepareLogin(context);
+    assert.notEqual(await page.evaluate(() => document.readyState), 'complete');
+    assert.equal(await page.getByText('登录', { exact: true }).isVisible(), true);
+  } finally {
+    release();
+    await browser.close();
+  }
 });
 async function fixture(
   context: BrowserContext,

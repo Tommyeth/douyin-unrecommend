@@ -13,6 +13,7 @@ type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type LoginEvent = {
   type: 'waiting' | 'image' | 'confirmed' | 'input';
   image?: string;
+  mime?: 'image/jpeg' | 'image/png';
   expires?: number;
   session?: string;
   frame?: string;
@@ -55,6 +56,8 @@ export class BrowserService extends Workflow {
     return context;
   }
   async login(signal: AbortSignal, emit: (event: LoginEvent) => void, control?: LoginControl) {
+    const expires = Date.now() + 235000;
+    emit({ type: 'waiting', expires });
     let browser: Browser | undefined;
     let phase = 'browser_start';
     let timedOut = false;
@@ -73,43 +76,40 @@ export class BrowserService extends Workflow {
       const context = await this.context(browser);
       phase = 'login_page';
       const page = await prepareLogin(context);
-      const expires = Date.now() + 180000;
       emit({ type: 'waiting', expires });
       let previousImage = '';
-      let refreshedAfterSession = false;
       let screenshotFailures = 0;
       let frame = '';
+      let frames: { id: string; url: string; at: number }[] = [];
+      let nextImage = 0;
+      let controlFailures = 0;
       while (Date.now() < expires && !signal.aborted) {
-        const command = await control?.poll();
+        let command: Awaited<ReturnType<LoginControl['poll']>> | undefined;
+        try {
+          command = await control?.poll();
+          controlFailures = 0;
+        } catch (e) {
+          if (
+            (!(e instanceof SafeError) || ['BUSY', 'STATE_READ', 'STATE_WRITE'].includes(e.code)) &&
+            ++controlFailures <= 3
+          ) {
+            emit({
+              type: 'waiting',
+              expires,
+              message: '状态连接暂时不稳定，正在恢复，请勿重复提交验证码。',
+            });
+            await sleep(700);
+            continue;
+          }
+          throw e;
+        }
         if (command?.cancelled) throw new SafeError('LOGIN_CANCELLED', '已取消扫码。');
         phase = 'login_identity';
         let account: string | undefined;
         try {
-          account = await identity(page, 600);
+          account = await identity(page, 100);
         } catch (e) {
           if (!(e instanceof SafeError) || e.code !== 'LOGIN_REQUIRED') throw e;
-        }
-        if (
-          !account &&
-          !refreshedAfterSession &&
-          (await context.cookies('https://www.douyin.com')).some(
-            (c) => c.name === 'sessionid' && c.value,
-          )
-        ) {
-          refreshedAfterSession = true;
-          await page.goto('https://www.douyin.com/user/self?from_tab_name=main&showTab=recommend', {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000,
-          });
-          if (command?.input)
-            emit({
-              type: 'input',
-              id: command.input.id,
-              message: '登录页面已跳转，请查看新画面后重新操作。',
-            });
-          previousImage = '';
-          frame = '';
-          continue;
         }
         if (account) {
           phase = 'save_session';
@@ -130,7 +130,17 @@ export class BrowserService extends Workflow {
         }
         if (command?.input) {
           try {
-            await applyLoginInput(page, command.input, frame);
+            await applyLoginInput(
+              page,
+              command.input,
+              new Set(
+                frames
+                  .filter(
+                    (f) => f.url === page.url() && (f.id === frame || Date.now() - f.at < 5000),
+                  )
+                  .map((f) => f.id),
+              ),
+            );
             emit({ type: 'input', id: command.input.id, message: '操作已发送，请查看新画面。' });
           } catch (e) {
             emit({
@@ -140,11 +150,19 @@ export class BrowserService extends Workflow {
             });
           }
           previousImage = '';
+          frames = [];
+          nextImage = 0;
+        }
+        if (Date.now() < nextImage) {
+          await sleep(300);
+          continue;
         }
         phase = 'login_image';
         let image: string;
         try {
-          image = (await page.screenshot({ type: 'png', timeout: 5000 })).toString('base64');
+          image = (await page.screenshot({ type: 'jpeg', quality: 85, timeout: 2500 })).toString(
+            'base64',
+          );
           screenshotFailures = 0;
         } catch (e) {
           // QR confirmation can navigate while captureScreenshot is in flight.
@@ -164,10 +182,19 @@ export class BrowserService extends Workflow {
         }
         if (image !== previousImage) {
           frame = crypto.randomUUID();
-          emit({ type: 'image', image, expires, frame, session: control?.session });
+          frames = [...frames, { id: frame, url: page.url(), at: Date.now() }].slice(-3);
+          emit({
+            type: 'image',
+            image,
+            mime: 'image/jpeg',
+            expires,
+            frame,
+            session: control?.session,
+          });
           previousImage = image;
         } else emit({ type: 'waiting', expires });
-        await sleep(3000);
+        nextImage = Date.now() + 1000;
+        await sleep(300);
       }
       throw new SafeError(
         'LOGIN_EXPIRED',

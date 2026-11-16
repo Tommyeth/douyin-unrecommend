@@ -1,4 +1,4 @@
-import { get, put } from '@vercel/blob';
+import { get, put, BlobPreconditionFailedError } from '@vercel/blob';
 import { DatabaseSync } from 'node:sqlite';
 import { seal, unseal } from '../crypto.js';
 import { Store } from '../store.js';
@@ -31,14 +31,22 @@ export const emptyState = (): State => ({
   rows: { kv: [], videos: [], outbox: [] },
   lease: null,
 });
-export function blobBackend(secret: string, pathname = 'douyin/state-v1.sealed'): StateBackend {
+export function blobBackend(
+  secret: string,
+  pathname = 'douyin/state-v1.sealed',
+  io: { get: typeof get; put: typeof put } = { get, put },
+): StateBackend {
   const read = async () => {
-    const result = await get(pathname, {
+    const result = await io.get(pathname, {
       access: 'private',
       useCache: false,
+      // Compressed GET responses use W/ ETags, which are invalid for If-Match.
+      headers: { 'Accept-Encoding': 'identity' },
       abortSignal: AbortSignal.timeout(15000),
     });
     if (!result) return { state: emptyState(), etag: null };
+    if (!result.blob.etag || result.blob.etag.startsWith('W/'))
+      throw new SafeError('STATE_ETAG', '存储未返回可写入的版本标识，请稍后重试。', 503);
     if (result.statusCode !== 200 || !result.stream || (result.blob.size ?? 0) > 4_000_000)
       throw new SafeError('STATE_READ', '状态文件不可读取或已超出容量。', 503);
     let state: State;
@@ -63,7 +71,7 @@ export function blobBackend(secret: string, pathname = 'douyin/state-v1.sealed')
       if (body.length > 4_000_000)
         throw new SafeError('STATE_SIZE', '状态文件超出容量，已停止写入。', 503);
       try {
-        const result = await put(pathname, body, {
+        const result = await io.put(pathname, body, {
           access: 'private',
           addRandomSuffix: false,
           allowOverwrite: etag !== null,
@@ -72,11 +80,11 @@ export function blobBackend(secret: string, pathname = 'douyin/state-v1.sealed')
           abortSignal: AbortSignal.timeout(15000),
         });
         return result.etag;
-      } catch {
+      } catch (error) {
         // A successful write can lose its response. Verify our revision before reporting failure.
         const current = await read();
         if (current.state.revision === state.revision && current.etag) return current.etag;
-        if (current.etag !== etag)
+        if (error instanceof BlobPreconditionFailedError || current.etag !== etag)
           throw new SafeError('BUSY', '状态已由另一个任务更新，请稍后重试。', 409);
         throw new SafeError('STATE_WRITE', '状态写入失败，请稍后检查运行结果。', 503);
       }

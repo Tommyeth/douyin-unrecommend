@@ -7,6 +7,7 @@ import {
   emptyState,
   requestLoginCancel,
   queueLoginInput,
+  blobBackend,
   type State,
   type StateBackend,
 } from '../src/vercel/state.js';
@@ -20,7 +21,8 @@ import { Store } from '../src/store.js';
 import { readFileSync } from 'node:fs';
 import { schema } from '../src/vercel/schema.js';
 import { chromium, type Browser } from 'playwright-core';
-import { unseal } from '../src/crypto.js';
+import { unseal, seal } from '../src/crypto.js';
+import { BlobPreconditionFailedError, type put } from '@vercel/blob';
 import { flush } from '../src/notify.js';
 import { parseLoginInput, applyLoginInput } from '../src/browser/input.js';
 import { serve } from '@hono/node-server';
@@ -64,6 +66,53 @@ test('私有状态拒绝并发更新，任务异常仍保存退避和待发记�
   );
   assert.equal(await readState(b, (s) => s.get('error')), 'expected');
   assert.equal(await readState(b, async (_s, busy) => busy), false);
+});
+test('大状态下载不使用压缩弱 ETag，条件写与后续保存仍成功', async () => {
+  const state = emptyState();
+  state.rows.kv.push({ key: 'large', value: 'x'.repeat(2000) });
+  let wire = await seal(state, env.AUTH_SECRET),
+    version = 1,
+    writes = 0;
+  const io: NonNullable<Parameters<typeof blobBackend>[2]> = {
+    async get(_path, options) {
+      const identity = new Headers(options.headers).get('Accept-Encoding') === 'identity';
+      return {
+        statusCode: 200,
+        stream: new Blob([wire]).stream(),
+        headers: new Headers(),
+        blob: {
+          url: '',
+          downloadUrl: '',
+          pathname: 'fixture',
+          contentType: 'application/octet-stream',
+          contentDisposition: '',
+          cacheControl: '',
+          size: wire.length,
+          uploadedAt: new Date(),
+          etag: (identity ? '' : 'W/') + '"v' + version + '"',
+        },
+      };
+    },
+    put: (async (_path, body, options) => {
+      if (options.ifMatch !== '"v' + version + '"') throw new BlobPreconditionFailedError();
+      assert.equal(typeof body, 'string');
+      wire = String(body);
+      writes++;
+      version++;
+      return {
+        url: '',
+        downloadUrl: '',
+        pathname: 'fixture',
+        contentType: 'application/octet-stream',
+        contentDisposition: '',
+        etag: '"v' + version + '"',
+      };
+    }) as typeof put,
+  };
+  const b = blobBackend(env.AUTH_SECRET, 'fixture', io);
+  await changeState(b, (s) => s.set('result', 'saved'));
+  assert.equal(writes, 2);
+  assert.equal(await readState(b, (s) => s.get('result')), 'saved');
 });
 test('状态保存使用条件写，过期任务不能覆盖新任务的结果', async () => {
   const b = backend();
@@ -388,6 +437,15 @@ test('旧画面和离开抖音域名时不执行人工点击', async () => {
 });
 test('管理页人工点击、输入和确认可贯通独立请求并保存模拟登录态', { timeout: 45000 }, async () => {
   const b = backend();
+  const originalWrite = b.write;
+  let transientFailure = false;
+  b.write = async (state, etag) => {
+    if (state.lease?.inputIds?.length === 1 && !transientFailure) {
+      transientFailure = true;
+      throw new SafeError('STATE_WRITE', 'temporary');
+    }
+    return originalWrite(state, etag);
+  };
   const html = `<meta charset=utf-8><button id=option style="position:absolute;left:100px;top:100px;width:200px;height:50px" onclick="document.querySelector('#code').hidden=false">模拟验证方式</button><input id=code hidden style="position:absolute;left:100px;top:200px;width:200px;height:50px" onkeydown="if(event.key==='Enter'&&this.value==='fixture-code')document.querySelector('#user_detail_element').hidden=false"><div id=user_detail_element hidden><div data-e2e=user-info>抖音号：fixture</div></div>`;
   const remote = await loginBrowser(false, html);
   const api = vercelApp(env, b, async () => remote);
@@ -417,26 +475,23 @@ test('管理页人工点击、输入和确认可贯通独立请求并保存模�
         },
       });
     };
+    await remotePage.evaluate(() => {
+      document.body.dataset.verification = 'stay';
+    });
     await remote
       .contexts()[0]
       .addCookies([{ name: 'sessionid', value: 'fixture', domain: 'www.douyin.com', path: '/' }]);
     await click('#option');
-    await p.waitForFunction(() =>
-      document.querySelector('#verifyState')?.textContent?.includes('页面已跳转'),
-    );
-    await click('#option');
     await remotePage.locator('#code').waitFor({ state: 'visible' });
+    assert.equal(await remotePage.locator('body').getAttribute('data-verification'), 'stay');
+    assert.equal(transientFailure, true);
+    assert.match(await p.locator('#sessionClock').innerText(), /本次登录剩余 03:/);
     await click('#code');
     await remotePage.waitForFunction(() => document.activeElement?.id === 'code');
     await ready();
     await p.locator('#verifyText').fill('fixture-code');
-    await p.locator('#sendVerifyText').click();
-    await remotePage.waitForFunction(
-      () => (document.querySelector('#code') as HTMLInputElement).value === 'fixture-code',
-    );
+    await p.locator('#sendVerifySubmit').click();
     assert.equal(await p.locator('#verifyText').inputValue(), '');
-    await ready();
-    await p.locator('#verifyEnter').click();
     await p.waitForFunction(
       () => document.querySelector('#logged')?.textContent === '已保存登录态',
     );

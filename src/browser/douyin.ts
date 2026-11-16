@@ -196,11 +196,18 @@ export async function prepareLogin(context: BrowserContext) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
   page.setDefaultNavigationTimeout(45000);
-  await page.goto(HOME, { waitUntil: 'domcontentloaded' });
+  // Slow secondary resources must not prevent the already-visible page from being used.
+  await page.goto(HOME, { waitUntil: 'commit', timeout: 25000 });
+  await page
+    .getByText('登录', { exact: true })
+    .first()
+    .waitFor({ state: 'visible', timeout: 3000 })
+    .catch(() => {});
   // 使用抖音官方二维码，不实现私有二维码登录协议，也不提交密码。
   for (const text of ['登录', '扫码登录']) {
     const button = page.getByText(text, { exact: true });
-    if ((await button.count()) === 1 && (await button.isVisible())) await button.click();
+    if ((await button.count()) === 1 && (await button.isVisible()))
+      await button.click({ timeout: 2000 }).catch(() => {});
   }
   return page;
 }
