@@ -4,7 +4,7 @@
 
 **Vercel 版使用真实 Chromium，网页、扫码会话、每小时任务和加密状态都运行在 Vercel，无需自备服务器或 Cloudflare 账号。**
 
-> 当前正在进行真实账号验收。Vercel Hobby 已成功部署、创建私有 Blob 并启用每小时 Schedules，真实 Chromium 已打开抖音官方二维码。扫码登录落地、读取推荐和取消是否通过，以 [Vercel 验证记录](docs/vercel-verification.md) 为准；自动测试使用模拟抖音响应，不替代真实账号验收。
+> Vercel 版本已通过真实账号验收：官方二维码与短信验证、加密保存并恢复登录态、读取新增推荐、自动取消并复核移除。实测新增 1 条、取消 1 条、完整列表归零。每小时 Schedules 已部署；通知协议通过自动测试，真实送达需配置自己的渠道。详细范围见 [Vercel 验证记录](docs/vercel-verification.md)。
 
 ## 两种模式
 
