@@ -32,4 +32,6 @@ Wrangler 会在构建时把裸写的 `navigator.userAgent` 替换为 `Cloudflare
 - `npm run test:hybrid`：真实 workerd + D1、模拟抖音接口，覆盖会话解密、读取、CSRF 取消、完整重读、Cron 入口和零 Browser Run 调用。
 - `npm run build:vercel`：通过。
 
-业务实测使用的是 Cloudflare Worker。Vercel 当前仍用 Chromium 执行日常任务；这次结果不能作为 Vercel 纯协议方案的验收结论。
+业务实测使用的是 Cloudflare Worker。该次验收时 Vercel 仍用 Chromium 执行日常任务；不能用 Cloudflare 的结果代替 Vercel 纯协议验收。
+
+后续 Vercel 的纯协议改造与验收另见 [Vercel 混合版记录](vercel-hybrid-verification.md)。

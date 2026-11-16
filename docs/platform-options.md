@@ -1,29 +1,41 @@
-# 免费部署与平台选择
+# 部署可行性与费用选择
 
-核对日期：2026-11-16。以下是官方运行条件与架构判断，**不代表抖音登录在对应平台已通过验收**。当前已提供 Vercel Chromium 适配，生产验证进度见 [Vercel 验证记录](vercel-verification.md)。
+核对日期：2026-11-16。这里比较本项目已有实现；平台能启动容器或浏览器，不等于抖音账号在那个出口已通过验证。
 
-| 方案                                 | 浏览器能力                                | 免费运行的主要限制                                                        | 本项目判断                                                                    |
-| ------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 普通 Cloudflare Worker               | 无内置 Chromium；当前提供 DOM/Canvas 子集 | 每次 HTTP / Cron CPU 10 ms；128 MB 内存                                   | HTTP 定时任务合适，环境模拟的 CPU 仍需实测                                    |
-| Worker + Browser Run                 | 使用 Cloudflare 独立托管 Chromium         | 浏览器合计每天 10 分钟，另计 Worker/D1 用量                               | 每小时或两小时执行并立即关闭浏览器，可降低用量；扫码等待也计入预算            |
-| Vercel Node.js Functions + Schedules | 可打包适合 serverless 的 Chromium         | Fluid Compute 下 Hobby 单次最多 300 秒、2 GB / 1 vCPU；Schedules 另有限额 | 已实现持续扫码连接、Private Blob 加密持久化与每小时任务，真实账号验收尚未完成 |
+| 选择                                           | 适合的情况                                | 资源与边界                                                                                                                                |
+| ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [Vercel 混合版](vercel.md)                     | 不维护服务器，低频个人使用                | Functions + Private Blob + Schedules；仅登录启动 Chromium。默认实际检查一小时，可选 15 分钟，但 Blob 免费写入额度不足以持续整月运行该频率 |
+| [Cloudflare Paid 混合版](cloudflare-hybrid.md) | 不维护服务器，希望每 15 分钟检查          | Worker + Cron + D1 + Browser Run；浏览器只用于登录，基础套餐 $5/月起，另看资源超额用量。扫码等待也算浏览器时间                            |
+| [VPS Docker](docker.md)                        | 已有服务器，重视直接键鼠操作或 5 分钟间隔 | 持久磁盘、足够内存、长期运行进程、HTTP/WebSocket 入口。费用按 VPS 提供商；本项目不收软件订阅费                                            |
+| [Dots 直控](dots.md)                           | 希望通过对话操作网页，愿意验收实验流程    | 依赖宿主的云浏览器、可保存状态的目录和实际定时能力；不是可任意部署 Docker 的 VPS 承诺                                                     |
+| [纯协议实验版](pure-protocol.md)               | 研究无浏览器登录                          | 真实扫码登录仍未完成验收，增加 Worker CPU 额度不等于获得完整 Chromium                                                                     |
 
-来源：[Workers 限制](https://developers.cloudflare.com/workers/platform/limits/)、[Browser Run 定价](https://developers.cloudflare.com/browser-run/pricing/)、[Vercel Functions 限制](https://vercel.com/docs/functions/limitations/)、[Vercel Chromium 官方示例](https://vercel.com/kb/guide/deploying-puppeteer-with-nextjs-on-vercel)。Vercel 应选择 Node.js Functions；此处不是指 Edge Runtime。
+费用来源：[Vercel](https://vercel.com/pricing)、[Blob](https://vercel.com/docs/vercel-blob/usage-and-pricing)、[Workers](https://developers.cloudflare.com/workers/platform/pricing/)、[Browser Run](https://developers.cloudflare.com/browser-run/pricing/)。各平台资源是否够用应以实际账单和控制台计量为准。
 
-## Vercel 的定时任务有两套限制
+## Vercel 的两种定时入口
 
-旧 [Cron Jobs](https://vercel.com/docs/schedules/cron-jobs/usage-and-pricing) 在 Hobby 中每个任务最多每天执行一次，时间可落在配置小时内。
+本项目使用新的 **Schedules（Beta）**：Hobby 最快每 15 分钟，固定 15 分钟抖动窗口，每计费周期最多 5000 次执行，手动触发也计数。[Schedules 限制](https://vercel.com/docs/schedules/limits)
 
-新的 [Schedules（Beta）](https://vercel.com/docs/schedules/limits) 支持 Hobby 最快每 15 分钟一次，固定 15 分钟调度抖动窗口；每个团队每计费周期最多执行 5000 次，手动运行也计数。一小时一次按 30 天算为 720 次，低于这一调度配额，但 Functions、数据库等仍分别消耗额度。Beta API 与限制可能变化。
+不要用旧 Cron Jobs 的限制推断这个入口。调度到达后还会判断面板设定的实际间隔，未到期只读状态；实际运行存在调度抖动和失败退避，不保证精确到分钟。
 
-## 浏览器与扫码流程
+按 31 天估算，一小时实际检查约 744 轮，15 分钟约 2976 轮。每轮取得租约、提交结果各写一次 Blob，分别约 1488 / 5952 次高级操作；Hobby 含 2000 次。扫码、人工输入、设置与手动检查另计。因此，15 分钟调度可创建，不代表这个项目按该频率实际检查可以长期免费。纯协议降低浏览器计算开销，不会免掉这些状态写入。
 
-Vercel 可以运行真实 Chromium，这能省去手工补齐 DOM/Canvas 的工作。浏览器不应在函数返回后依赖进程内存继续等待下一次请求：扫码等待需要在有效执行期限内完成，或设计独立、可恢复的会话流程；本项目将登录 Cookie 等状态加密保存到 Vercel Private Blob，不需要外部数据库。当前 Node 版的本地 SQLite 文件不能直接作为无状态 Functions 的持久存储。
+## 其他容器平台
 
-每轮任务应恢复登录态、读取推荐、按模式通知或取消、复核结果，然后关闭浏览器。实际是否通过抖音登录仍需测量，云平台出口和 headless 浏览器不会自动获得平台认可。
+目前没有单独提供或验收 Render、Zeabur 等平台适配。若准备复用 Docker，部署前需确认：
 
-## 个人使用与客户服务
+- 是否允许长期运行进程，以及休眠期间如何触发任务。
+- 是否提供持久卷；重建后 SQLite 和登录态是否仍在。
+- Chromium 所需内存、共享内存、系统依赖能否满足。
+- noVNC 所需 WebSocket 和长连接是否可用。
+- 免费试用金、免费实例和可持续免费额度分别是什么。
 
-[Vercel Hobby](https://vercel.com/pricing) 定位为个人、非商业用途。个人自行部署测试可以评估免费方案；收费托管或商业客户服务应按适用套餐评估，不能把 Hobby 当成商业服务的永久免费承诺。
+满足这些条件才有继续适配和实测的基础，不能只凭“免费容器”就认定支持。本轮未新增这些部署方式。
 
-本项目先保留一小时的默认检查间隔，可调到两小时。延长间隔会增加发现和取消延迟，并不会提高单次 CPU、内存或执行时长限制。
+## 个人与客户部署
+
+[Vercel Hobby](https://vercel.com/docs/plans/hobby) 限个人非商业用途；商业托管应按适用套餐部署。项目当前为单部署单账号，未实现客户多租户、计费或账号隔离管理系统。
+
+更换运行平台不会暂停旧调度。先验收新平台，再决定停用旧任务，避免同一账号被两个后台同时处理。
+
+返回 [方案对比](../README.md)。

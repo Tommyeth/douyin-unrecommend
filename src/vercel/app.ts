@@ -3,10 +3,11 @@ import { config } from '../config.js';
 import { validToken } from '../crypto.js';
 import { nodeMail } from '../node.js';
 import { SafeError, safeError } from '../types.js';
+import { VercelHybridService } from './hybrid-service.js';
 import { BrowserService } from '../browser/service.js';
 import type { LaunchBrowser } from '../browser/launch.js';
 import { renderHtml } from '../ui.js';
-import { vercelPolicy, type BrowserPolicy } from '../browser/policy.js';
+import { vercelHybridPolicy, type BrowserPolicy } from '../browser/policy.js';
 import {
   blobBackend,
   changeState,
@@ -22,17 +23,20 @@ export function vercelApp(
   launch?: LaunchBrowser,
   options: {
     policy?: BrowserPolicy;
+    transport?: typeof fetch;
     desktop?: {
       cookie(session: string, origin: string): Promise<string>;
       close(session: string): void;
     };
   } = {},
 ) {
-  const policy = options.policy ?? vercelPolicy;
+  const policy = options.policy ?? vercelHybridPolicy;
   const cfg = config(env);
   backend ??= blobBackend(cfg.authSecret);
   const service = (store: import('../store.js').Store) =>
-    new BrowserService(cfg, store, nodeMail, launch, policy);
+    policy.runtime === 'vercel-hybrid'
+      ? new VercelHybridService(cfg, store, nodeMail, launch, policy, options.transport)
+      : new BrowserService(cfg, store, nodeMail, launch, policy);
   const change = <T>(fn: (s: BrowserService) => Promise<T>) =>
     changeState(backend!, (store) => fn(service(store)));
   const api = new Hono();
@@ -78,6 +82,20 @@ export function vercelApp(
     const { mode, interval } = await c.req.json();
     return c.json(await change((s) => s.setSettings(mode, interval)));
   });
+  for (const [path, action] of [
+    ['session/upgrade', 'upgradeSession'],
+    ['session/validate', 'validateCandidate'],
+  ] as const) {
+    api.post('/api/' + path, async (c) =>
+      c.json(
+        await change(async (s) => {
+          if (!(s instanceof VercelHybridService))
+            throw new SafeError('UNSUPPORTED', '此部署不提供协议会话转换。', 404);
+          return s[action]();
+        }),
+      ),
+    );
+  }
   api.post('/api/account/refresh', async (c) => c.json(await change((s) => s.refreshProfile())));
   api.get('/api/account/avatar', async (c) => {
     const avatar = await readState(backend!, (store) => service(store).avatar());
@@ -161,12 +179,19 @@ export async function scheduledPoll(
   env: Record<string, unknown> = process.env,
   backend?: StateBackend,
   launch?: LaunchBrowser,
-  policy: BrowserPolicy = vercelPolicy,
+  policy: BrowserPolicy = vercelHybridPolicy,
+  transport: typeof fetch = fetch,
 ) {
   const cfg = config(env);
   backend ??= blobBackend(cfg.authSecret);
   const due = await readState(backend, async (store) => {
     if (!(await store.get('auth'))) return false;
+    if (
+      policy.runtime === 'vercel-hybrid' &&
+      !(await new VercelHybridService(cfg, store, nodeMail, launch, policy, transport).status())
+        .loggedIn
+    )
+      return false;
     return (
       scheduledAt >= Number((await store.get('next_poll')) ?? 0) &&
       (await store.get('last_schedule_id')) !== executionId
@@ -177,7 +202,36 @@ export async function scheduledPoll(
     return await changeState(backend, async (store) => {
       if ((await store.get('last_schedule_id')) === executionId) return { skipped: true };
       await store.set('last_schedule_id', executionId);
-      return new BrowserService(cfg, store, nodeMail, launch, policy).poll(true, scheduledAt);
+      const service =
+        policy.runtime === 'vercel-hybrid'
+          ? new VercelHybridService(cfg, store, nodeMail, launch, policy, transport)
+          : new BrowserService(cfg, store, nodeMail, launch, policy);
+      try {
+        const result = await service.poll(true, scheduledAt);
+        await store.set(
+          'schedule_diagnostic',
+          JSON.stringify({
+            ok: true,
+            scheduledAt,
+            finishedAt: Date.now(),
+            executionId,
+            skipped: result.skipped === true,
+          }),
+        );
+        return result;
+      } catch (e) {
+        await store.set(
+          'schedule_diagnostic',
+          JSON.stringify({
+            ok: false,
+            scheduledAt,
+            finishedAt: Date.now(),
+            executionId,
+            error: safeError(e).code,
+          }),
+        );
+        throw e;
+      }
     });
   } catch (e) {
     if (e instanceof SafeError && e.code === 'BUSY') return { skipped: true, reason: 'busy' };

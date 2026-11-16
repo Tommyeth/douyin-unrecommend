@@ -1,3 +1,4 @@
+import { vercelPolicy } from '../src/browser/policy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Script } from 'node:vm';
@@ -12,7 +13,7 @@ import {
   type StateBackend,
 } from '../src/vercel/state.js';
 import { renderHtml } from '../src/ui.js';
-import { vercelApp, scheduledPoll } from '../src/vercel/app.js';
+import { vercelApp as createVercelApp, scheduledPoll } from '../src/vercel/app.js';
 import { SafeError } from '../src/types.js';
 import { BrowserService } from '../src/browser/service.js';
 import { config } from '../src/config.js';
@@ -27,6 +28,10 @@ import { flush } from '../src/notify.js';
 import { parseLoginInput, applyLoginInput } from '../src/browser/input.js';
 import { serve } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
+
+// Legacy Chromium contracts remain covered independently of the hybrid flow.
+const vercelApp = (...args: Parameters<typeof createVercelApp>) =>
+  createVercelApp(args[0], args[1], args[2], { ...args[3], policy: vercelPolicy });
 
 const env = { ADMIN_TOKEN: 'a'.repeat(40), AUTH_SECRET: 'b'.repeat(40) };
 function backend() {
@@ -634,6 +639,58 @@ test('独立取消请求无需断开原连接即可关闭 Chromium 并释放租�
       false,
     );
     assert.equal(await readState(b, async (_s, busy) => busy), false);
+    assert.equal(browser.isConnected(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('连续截图失败超过三次仍保留登录窗口，恢复后可正常取消', { timeout: 20000 }, async () => {
+  const b = backend();
+  const browser = await loginBrowser(false);
+  const originalContext = browser.newContext.bind(browser);
+  let attempts = 0,
+    sawImage = false;
+  browser.newContext = async (options) => {
+    const context = await originalContext(options);
+    const newPage = context.newPage.bind(context);
+    context.newCDPSession = async () => {
+      throw Error('Unable to capture screenshot');
+    };
+    context.newPage = async () => {
+      const page = await newPage();
+      const screenshot = page.screenshot.bind(page);
+      page.screenshot = async (options) => {
+        if (++attempts <= 4) throw Error('Unable to capture screenshot');
+        return screenshot(options);
+      };
+      return page;
+    };
+    return context;
+  };
+  const controller = new AbortController();
+  try {
+    await assert.rejects(
+      changeState(b, async (store) => {
+        const s = new BrowserService(
+          config(env),
+          store,
+          () => {
+            throw Error('Unexpected SMTP');
+          },
+          async () => browser,
+        );
+        await s.login(controller.signal, (event) => {
+          if (event.type === 'image') {
+            sawImage = true;
+            controller.abort();
+          }
+        });
+      }),
+      /扫码连接已关闭/,
+    );
+    assert.equal(sawImage, true);
+    assert.ok(attempts > 4);
     assert.equal(browser.isConnected(), false);
   } finally {
     await browser.close();
