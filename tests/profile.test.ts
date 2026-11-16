@@ -43,7 +43,7 @@ async function savedLogin(b: StateBackend, id = 'fixture.profile') {
     await s.set('next_poll', '1234567890000');
   });
 }
-function profileBrowser(id: string, requests: string[]) {
+function profileBrowser(id: string, requests: string[], navigationAvatar = false) {
   return async () => {
     const browser = await chromium.launch();
     const newContext = browser.newContext.bind(browser);
@@ -56,12 +56,12 @@ function profileBrowser(id: string, requests: string[]) {
           const request = route.request();
           requests.push(request.method() + ' ' + new URL(request.url()).pathname);
           if (new URL(request.url()).pathname === '/fixture-avatar.svg') {
-            await new Promise((done) => setTimeout(done, 180));
+            await new Promise((done) => setTimeout(done, 1600));
             await route.fulfill({ contentType: 'image/svg+xml', body: avatarSvg });
           } else {
             await route.fulfill({
               contentType: 'text/html; charset=utf-8',
-              body: `<div id="user_detail_element"><span data-e2e="live-avatar"><img width="80" height="80" src="/fixture-avatar.svg" alt="测试头像"></span><h1>测试用户 &lt;b&gt;示例&lt;/b&gt;</h1><div data-e2e="user-info">抖音号：${id}</div></div>`,
+              body: `${navigationAvatar ? '<a href="/user/someone-else"><span data-e2e="live-avatar"><img alt="其他人头像"></span></a><a href="//www.douyin.com/user/self"><span data-e2e="live-avatar"><img src="/fixture-avatar.svg"></span></a>' : ''}<div id="user_detail_element">${navigationAvatar ? '' : '<span data-e2e="live-avatar"><img src="/fixture-avatar.svg" alt="测试头像"></span>'}<h1>测试用户 &lt;b&gt;示例&lt;/b&gt;</h1><div data-e2e="user-info">抖音号：${id}</div></div>`,
             });
           }
         });
@@ -80,7 +80,7 @@ test(
     const b = backend(),
       requests: string[] = [];
     await savedLogin(b);
-    const app = vercelApp(env, b, profileBrowser('fixture.profile', requests));
+    const app = vercelApp(env, b, profileBrowser('fixture.profile', requests, true));
     for (const [path, method] of [
       ['/api/status', 'GET'],
       ['/api/account/avatar', 'GET'],
@@ -197,6 +197,22 @@ test('资料读取容忍缺少头像或昵称，读取期间切换账号则拒�
       '<div id="user_detail_element"><div data-e2e="user-info">抖音号：fallback</div></div>',
     );
     const owner = await readAccount(page);
+    await page.locator('#user_detail_element').evaluate(
+      (root, image) => {
+        const heading = document.createElement('h1');
+        heading.textContent = '资料页昵称';
+        const img = document.createElement('img');
+        img.alt = '资料页昵称头像';
+        img.src = image;
+        root.appendChild(heading);
+        root.appendChild(img);
+      },
+      'data:image/svg+xml;base64,' + Buffer.from(avatarSvg).toString('base64'),
+    );
+    const full = await captureProfile(page, owner, null);
+    assert.equal(full.nickname, '资料页昵称');
+    assert.equal(full.avatar?.mime, 'image/jpeg');
+    await page.locator('h1, img').evaluateAll((elements) => elements.forEach((el) => el.remove()));
     const previous: AccountProfile = {
       ...owner,
       nickname: '原昵称',

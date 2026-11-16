@@ -7,6 +7,8 @@ export type AccountProfile = AccountIdentity & {
   nickname: string;
   updatedAt: number;
   avatar?: { mime: 'image/jpeg'; data: string };
+  // Private diagnostic only; never returned by the status API.
+  avatarIssue?: string;
 };
 
 export async function readAccount(page: Page, timeout = 10000): Promise<AccountIdentity> {
@@ -44,18 +46,35 @@ export async function captureProfile(
     .textContent({ timeout: 500 })
     .catch(() => null);
   if (nickname?.trim()) profile.nickname = nickname.trim().slice(0, 160);
-  const avatar = root.locator('[data-e2e="live-avatar"] img, img[alt$="头像"]').first();
+  const profileAvatar = root.locator('[data-e2e="live-avatar"] img, img[alt$="头像"]').first();
+  // Some Douyin layouts omit the large profile image. Only fall back to the
+  // navigation avatar whose link explicitly targets the signed-in user's page.
+  const selfAvatar = [
+    '/user/self',
+    'https://www.douyin.com/user/self',
+    '//www.douyin.com/user/self',
+  ]
+    .flatMap((href) => [
+      `a[href="${href}"] [data-e2e="live-avatar"] img`,
+      `a[href^="${href}?"] [data-e2e="live-avatar"] img`,
+    ])
+    .join(', ');
+  const avatar = (await profileAvatar.count()) ? profileAvatar : page.locator(selfAvatar).first();
+  let avatarStage = 'element';
   try {
-    await avatar.waitFor({ state: 'visible', timeout: 700 });
-    const box = await avatar.boundingBox();
+    // A lazy image can have a zero-sized box until it has decoded. Wait for the
+    // element first, then image data, and only measure its rendered dimensions.
+    await avatar.waitFor({ state: 'attached', timeout: 1500 });
+    avatarStage = 'image_load';
     const loaded = await avatar.evaluate(async (element) => {
       const img = element as HTMLImageElement;
       await Promise.race([
         img.decode().catch(() => {}),
-        new Promise((done) => setTimeout(done, 1200)),
+        new Promise((done) => setTimeout(done, 5000)),
       ]);
       return img.complete && img.naturalWidth > 0;
     });
+    const box = await avatar.boundingBox();
     if (
       loaded &&
       box &&
@@ -64,6 +83,7 @@ export async function captureProfile(
       box.width <= 512 &&
       box.height <= 512
     ) {
+      avatarStage = 'screenshot';
       const bytes = await avatar.screenshot({
         type: 'jpeg',
         quality: 80,
@@ -72,8 +92,10 @@ export async function captureProfile(
       });
       if (bytes.length <= 96_000)
         profile.avatar = { mime: 'image/jpeg', data: bytes.toString('base64') };
-    }
-  } catch {
+      else profile.avatarIssue = 'image_too_large';
+    } else profile.avatarIssue = loaded ? 'invalid_dimensions' : 'image_not_loaded';
+  } catch (error) {
+    profile.avatarIssue = avatarStage + ':' + (error instanceof Error ? error.name : 'unknown');
     // Missing/slow images must not break login or recommendation processing.
   }
   const current = await readAccount(page, 500);
