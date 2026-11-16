@@ -255,7 +255,7 @@ export class BrowserService extends Workflow {
       throw new SafeError('AUTH_DECRYPT', '登录态无法解密，请检查 AUTH_SECRET。');
     }
     if (saved.version !== 'chromium-1')
-      throw new SafeError('LOGIN_REQUIRED', '请使用 Vercel 管理页重新扫码。');
+      throw new SafeError('LOGIN_REQUIRED', '请使用管理页重新扫码。');
     const browser = await this.launch();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let context: BrowserContext | undefined;

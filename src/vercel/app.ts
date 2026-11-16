@@ -37,12 +37,14 @@ export function vercelApp(
     changeState(backend!, (store) => fn(service(store)));
   const api = new Hono();
   api.use('*', async (c, next) => {
+    const socketOrigin = new URL(String(env.PUBLIC_ORIGIN || c.req.url));
+    socketOrigin.protocol = socketOrigin.protocol === 'https:' ? 'wss:' : 'ws:';
     c.header('Cache-Control', 'no-store');
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:${policy.desktop ? ' data:' : ''}; connect-src 'self'${policy.desktop ? ' ' + socketOrigin.origin : ''}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
     );
     await next();
   });
