@@ -435,6 +435,48 @@ test('旧画面和离开抖音域名时不执行人工点击', async () => {
     await browser.close();
   }
 });
+test('确认嵌套页面输入焦点，未聚焦时不发送文本', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+    await page.route('**/*', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body:
+          new URL(route.request().url()).hostname === 'verify.douyin.com'
+            ? '<input id="code" autocomplete="off">'
+            : '<button id="outside">Outside</button><iframe src="https://verify.douyin.com/code"></iframe>',
+      }),
+    );
+    await page.goto('https://www.douyin.com/user/self');
+    const base = {
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame: crypto.randomUUID(),
+    };
+    const text = parseLoginInput({ ...base, action: 'text', text: 'fixture-code' });
+    await assert.rejects(applyLoginInput(page, text, base.frame), /尚未选中远端输入框/);
+    const code = page.frameLocator('iframe').locator('#code');
+    const box = (await code.boundingBox())!;
+    const result = await applyLoginInput(
+      page,
+      parseLoginInput({
+        ...base,
+        action: 'click',
+        x: (box.x + box.width / 2) / 1100,
+        y: (box.y + box.height / 2) / 800,
+      }),
+      base.frame,
+    );
+    assert.equal(result.focusedInput, true);
+    await applyLoginInput(page, text, base.frame);
+    assert.equal(await code.inputValue(), 'fixture-code');
+    await page.locator('#outside').click();
+    await assert.rejects(applyLoginInput(page, text, base.frame), /尚未选中远端输入框/);
+  } finally {
+    await browser.close();
+  }
+});
 test('管理页人工点击、输入和确认可贯通独立请求并保存模拟登录态', { timeout: 45000 }, async () => {
   const b = backend();
   const originalWrite = b.write;
@@ -488,6 +530,8 @@ test('管理页人工点击、输入和确认可贯通独立请求并保存模�
     assert.match(await p.locator('#sessionClock').innerText(), /本次登录剩余 03:/);
     await click('#code');
     await remotePage.waitForFunction(() => document.activeElement?.id === 'code');
+    await p.waitForFunction(() => document.activeElement?.id === 'verifyText');
+    assert.match(await p.locator('#verifyState').innerText(), /已选中远端输入框/);
     await ready();
     await p.locator('#verifyText').fill('fixture-code');
     await p.locator('#sendVerifySubmit').click();

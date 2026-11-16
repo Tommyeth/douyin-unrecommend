@@ -19,6 +19,7 @@ export type LoginEvent = {
   frame?: string;
   id?: string;
   message?: string;
+  focusedInput?: boolean;
 };
 export class BrowserService extends Workflow {
   private readonly notificationDeadline = Date.now() + 250000;
@@ -130,7 +131,7 @@ export class BrowserService extends Workflow {
         }
         if (command?.input) {
           try {
-            await applyLoginInput(
+            const result = await applyLoginInput(
               page,
               command.input,
               new Set(
@@ -141,7 +142,15 @@ export class BrowserService extends Workflow {
                   .map((f) => f.id),
               ),
             );
-            emit({ type: 'input', id: command.input.id, message: '操作已发送，请查看新画面。' });
+            const focusedInput = command.input.action === 'click' && result.focusedInput;
+            emit({
+              type: 'input',
+              id: command.input.id,
+              focusedInput,
+              message: focusedInput
+                ? '已选中远端输入框，请在本地输入栏填写验证码并发送。'
+                : '操作已发送，请查看新画面。',
+            });
           } catch (e) {
             emit({
               type: 'input',
@@ -160,9 +169,9 @@ export class BrowserService extends Workflow {
         phase = 'login_image';
         let image: string;
         try {
-          image = (await page.screenshot({ type: 'jpeg', quality: 85, timeout: 2500 })).toString(
-            'base64',
-          );
+          image = (
+            await page.screenshot({ type: 'jpeg', quality: 85, caret: 'initial', timeout: 2500 })
+          ).toString('base64');
           screenshotFailures = 0;
         } catch (e) {
           // QR confirmation can navigate while captureScreenshot is in flight.

@@ -12,6 +12,27 @@ export type LoginControl = {
   poll(): Promise<{ cancelled: boolean; input: LoginInput | null }>;
 };
 const uuid = (x: unknown): x is string => typeof x === 'string' && /^[a-f\d-]{36}$/i.test(x);
+async function hasFocusedInput(page: Page) {
+  for (const frame of page.frames()) {
+    const focused = await frame
+      .evaluate(() => {
+        if (!document.hasFocus()) return false;
+        let el = document.activeElement;
+        while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+        if (el instanceof HTMLInputElement)
+          return (
+            !el.disabled &&
+            !el.readOnly &&
+            ['text', 'password', 'tel', 'email', 'number', 'search', 'url'].includes(el.type)
+          );
+        if (el instanceof HTMLTextAreaElement) return !el.disabled && !el.readOnly;
+        return el instanceof HTMLElement && el.isContentEditable;
+      })
+      .catch(() => false);
+    if (focused) return true;
+  }
+  return false;
+}
 export function parseLoginInput(raw: unknown): LoginInput {
   if (!raw || typeof raw !== 'object') throw new SafeError('INPUT', '验证操作格式无效。', 400);
   const c = raw as Record<string, unknown>;
@@ -69,6 +90,11 @@ export async function applyLoginInput(
       Math.min(size.height - 1, input.y * size.height),
     );
   } else if (input.action === 'text') {
+    if (!(await hasFocusedInput(page)))
+      throw new SafeError(
+        'INPUT_FOCUS',
+        '尚未选中远端输入框，请先点击画面中的输入框，等到选中提示后再发送。',
+      );
     await page.keyboard.insertText(input.text);
     if (input.submit) await page.keyboard.press('Enter');
   } else if (input.action === 'check') {
@@ -77,4 +103,5 @@ export async function applyLoginInput(
       timeout: 15000,
     });
   } else await page.keyboard.press(input.key);
+  return { focusedInput: await hasFocusedInput(page) };
 }
