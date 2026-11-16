@@ -696,3 +696,50 @@ test('连续截图失败超过三次仍保留登录窗口，恢复后可正常�
     await browser.close();
   }
 });
+
+test('远程滚动与拖动只接受有界坐标，在同一登录画面执行真实鼠标事件', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.route('**/*', (r) =>
+      r.fulfill({
+        contentType: 'text/html',
+        body: '<style>body{height:3000px}input{position:absolute;left:40px;top:100px;width:200px;height:30px}</style><input type="range" min="0" max="100" value="0">',
+      }),
+    );
+    await page.goto('https://www.douyin.com/');
+    const base = {
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame: crypto.randomUUID(),
+    };
+    for (const action of [
+      { action: 'wheel', x: 0, y: 0, deltaX: 0, deltaY: Infinity },
+      { action: 'drag', x: 0, y: 0, toX: 2, toY: 0 },
+      { action: 'key', key: 'ControlOrMeta+L' },
+    ])
+      assert.throws(() => parseLoginInput({ ...base, ...action }));
+    const drag = parseLoginInput({
+      ...base,
+      action: 'drag',
+      x: 50 / 800,
+      y: 117 / 600,
+      toX: 220 / 800,
+      toY: 117 / 600,
+    });
+    await applyLoginInput(page, drag, base.frame);
+    assert.ok(Number(await page.locator('input').inputValue()) > 70);
+    const wheel = parseLoginInput({
+      ...base,
+      action: 'wheel',
+      x: 0.7,
+      y: 0.7,
+      deltaX: 0,
+      deltaY: 500,
+    });
+    await applyLoginInput(page, wheel, base.frame);
+    await page.waitForFunction(() => window.scrollY > 0);
+  } finally {
+    await browser.close();
+  }
+});

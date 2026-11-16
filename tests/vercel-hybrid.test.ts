@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Script } from 'node:vm';
+import { serve } from '@hono/node-server';
+import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright-core';
 import { vercelApp, scheduledPoll } from '../src/vercel/app.js';
 import { changeState, readState, emptyState, type StateBackend } from '../src/vercel/state.js';
@@ -29,7 +31,9 @@ function backend(): StateBackend {
     },
   };
 }
-async function fixture(options: { reject?: boolean; other?: boolean; expired?: boolean } = {}) {
+async function fixture(
+  options: { reject?: boolean; other?: boolean; expired?: boolean; manual?: boolean } = {},
+) {
   const b = backend();
   let browser: Browser | undefined,
     starts = 0,
@@ -55,7 +59,9 @@ async function fixture(options: { reject?: boolean; other?: boolean; expired?: b
         await page.route('**/*', (r) =>
           r.fulfill({
             contentType: 'text/html; charset=utf-8',
-            body: '<div id="user_detail_element"><h1>测试昵称</h1><div data-e2e="user-info">抖音号：fixture</div></div>',
+            body: options.manual
+              ? '<style>body{margin:0}form{position:absolute;left:300px;top:300px}input{width:200px;height:30px}</style><div id="user_detail_element" hidden><h1>测试昵称</h1><div data-e2e="user-info">抖音号：fixture</div></div><form onsubmit="event.preventDefault();if(document.querySelector(\'#code\').value===\'fixture-code\'){document.querySelector(\'#user_detail_element\').hidden=false;this.hidden=true}"><label>验证码<input id="code"></label><button>确认</button></form>'
+              : '<div id="user_detail_element"><h1>测试昵称</h1><div data-e2e="user-info">抖音号：fixture</div></div>',
           }),
         );
         return page;
@@ -239,3 +245,48 @@ test('Vercel 定时任务遇到失效会话记录失败，停止后续调度且�
   assert.equal(f.starts(), 1);
   assert.equal(f.posts(), 0);
 });
+
+test(
+  'Vercel 远程窗口完整显示画面，点击后直接输入、全选替换和 Enter 按序到达并完成登录',
+  { timeout: 60000 },
+  async () => {
+    const f = await fixture({ manual: true });
+    const server = serve({ fetch: f.app().fetch, port: 0, hostname: '127.0.0.1' });
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      await page.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port);
+      await page.locator('#token').fill(env.ADMIN_TOKEN);
+      await page.locator('#enter').click();
+      await page.locator('#login').waitFor({ state: 'visible' });
+      await page.locator('#login').click();
+      await page.locator('#remoteWindow[open] #qr').waitFor({ state: 'visible' });
+      const box = await page.locator('#qr').boundingBox();
+      assert.ok(
+        box && box.y >= 0 && box.y + box.height <= 720 && box.x >= 0 && box.x + box.width <= 1280,
+      );
+      // The remote form is deliberately below the midpoint, where the old panel clipped it.
+      await page
+        .locator('#qr')
+        .click({ position: { x: (box.width * 450) / 1100, y: (box.height * 315) / 800 } });
+      await page.keyboard.type('wrong');
+      await page.keyboard.press('ControlOrMeta+A');
+      await page.keyboard.type('fixture-code');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () => document.querySelector('#message')?.textContent?.includes('登录态已加密保存'),
+        undefined,
+        { timeout: 45000 },
+      );
+      assert.equal((await f.request('status')).body.loggedIn, true);
+      assert.equal(f.starts(), 1);
+      assert.equal(f.posts(), 0);
+    } finally {
+      await browser.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((e) => (e ? reject(e) : resolve())),
+      );
+    }
+  },
+);

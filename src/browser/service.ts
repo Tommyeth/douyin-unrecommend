@@ -28,6 +28,7 @@ export type LoginEvent = {
   id?: string;
   message?: string;
   focusedInput?: boolean;
+  code?: string;
 };
 export class BrowserService extends Workflow {
   private readonly notificationDeadline = Date.now() + 250000;
@@ -224,6 +225,7 @@ export class BrowserService extends Workflow {
             emit({
               type: 'input',
               id: command.input.id,
+              code: e instanceof SafeError ? e.code : 'INPUT_FAILED',
               message: e instanceof SafeError ? e.message : '操作未完成，请查看画面后手动重试。',
             });
           }
