@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-代码已部署，`/healthz` 返回 `vercel-hybrid`。原生产设置保持每 900 秒自动取消、通知渠道为空。调度为 Schedules `*/15 * * * *`、状态 active。
+代码已部署，`/healthz` 返回 `vercel-hybrid`。本地 87 项测试及 GitHub CI（含 Docker noVNC 集成测试、原生 Node 模块加载和 Worker 回归）全部通过。原生产设置保持每 900 秒自动取消、通知渠道为空。调度为 Schedules `*/15 * * * *`、状态 active。
 
-本轮发现旧登录态已失效，一次性转换未通过身份确认，原状态保留。真实重新扫码、纯协议读取和取消尚待完成，**暂不宣称本轮已验收通过**。旧版浏览器执行的历史记录见 [原验收记录](vercel-verification.md)，Cloudflare 的通过结果也不代替 Vercel 出口实测。
+本轮发现旧登录态已失效，一次性转换未通过身份确认，原状态保留。修复截图中断后，真实 Vercel 登录窗口持续到正常扫码时限，最终因未完成扫码而超时，未再提前报 `login_image`。真实重新扫码、纯协议读取和取消尚待完成，**暂不宣称本轮已验收通过**。旧版浏览器执行的历史记录见 [原验收记录](vercel-verification.md)，Cloudflare 的通过结果也不代替 Vercel 出口实测。
 
 ## 已验证的实现
 
