@@ -15,6 +15,72 @@
 
 Vercel 已通过真实账号的扫码、短信验证、恢复登录态、读取推荐及取消验收，见 [验证记录](docs/vercel-verification.md)。Docker 共用这些业务代码；容器测试覆盖真实 Chromium + noVNC 输入和模拟登录，不代表已在每个 VPS 网络上完成真实账号验收。
 
+## 部署结构
+
+### Vercel：无需自备服务器
+
+```mermaid
+flowchart TB
+    Panel["用户浏览器<br/>管理页、二维码截图、文字输入"]
+    Phone["手机抖音 App"]
+    Douyin["抖音官网与接口"]
+    Notify["Bark / 企业微信 / Webhook / SMTP"]
+
+    subgraph Vercel["Vercel 项目"]
+        Schedule["Schedules<br/>默认每 15 分钟检查任务是否到期"]
+        subgraph Functions["Vercel Functions"]
+            API["管理 API / 私有定时任务<br/>登录、检查、处理推荐"]
+            Chrome["真实 Chromium<br/>扫码、读取推荐、取消并复核"]
+            API <--> Chrome
+        end
+        Blob[("Private Blob<br/>加密登录态、设置、任务记录")]
+        Schedule --> API
+        API <--> Blob
+    end
+
+    Panel <-->|"HTTPS：截图与人工操作"| API
+    Chrome <--> Douyin
+    Phone -->|"扫码确认 / 身份验证"| Douyin
+    API -->|"按已配置渠道发送"| Notify
+```
+
+Chromium 随函数任务启动、结束后关闭。面板中的浏览器画面是截图，点击和文字通过管理 API 转发；实际检查间隔默认一小时，与每 15 分钟的调度触发分开。
+
+### VPS Docker：支持直接操作浏览器
+
+```mermaid
+flowchart TB
+    Panel["用户浏览器<br/>管理页 + noVNC 客户端"]
+    Douyin["抖音官网与接口"]
+    Notify["Bark / 企业微信 / Webhook / SMTP"]
+
+    subgraph VPS["自己的 VPS"]
+        Entry["SSH 隧道 或 HTTPS 反向代理"]
+        subgraph Container["Docker 容器"]
+            Node["Node 服务 · 8787<br/>管理 API、任务处理、桌面鉴权"]
+            Timer["进程内定时器<br/>每 15 秒检查任务是否到期"]
+            VNC["x11vnc<br/>5900 仅容器内部可达"]
+            Desktop["Xvfb + 有界面 Chromium<br/>扫码与人工验证"]
+            Headless["无头 Chromium<br/>读取推荐、取消并复核"]
+            Timer --> Node
+            Node <-->|"登录期间转发鼠标、键盘和画面"| VNC
+            VNC <--> Desktop
+            Node -->|"创建登录窗口"| Desktop
+            Node <-->|"到期执行检查"| Headless
+        end
+        Data[("Docker 数据卷<br/>SQLite 加密状态")]
+        Entry <--> Node
+        Node <--> Data
+    end
+
+    Panel <-->|"HTTP / WebSocket 经隧道或 HTTPS 保护"| Entry
+    Desktop <--> Douyin
+    Headless <--> Douyin
+    Node -->|"按已配置渠道发送"| Notify
+```
+
+noVNC 的键盘和鼠标操作直接进入容器里的 Chromium，登录窗口最长 15 分钟；日常检查使用无头浏览器，最短间隔 300 秒。登录成功后，两种部署都不需要保持管理页打开。
+
 ## 运行方式
 
 - **仅提醒 `notify`**：发现新增推荐就发送消息，保留推荐。至少配置一个通知渠道。
