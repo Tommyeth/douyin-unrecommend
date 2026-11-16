@@ -96,6 +96,7 @@ export class Http {
     public transport: typeof fetch = fetch,
     public timeout = 20000,
     public signal?: AbortSignal,
+    public userAgent = UA,
   ) {}
   async request(raw: string, init: RequestInit = {}) {
     const url = new URL(raw);
@@ -108,7 +109,7 @@ export class Http {
     )
       throw new SafeError('UPSTREAM_HOST', '拒绝向非登录协议域名发送请求。');
     const headers = new Headers({
-      'User-Agent': UA,
+      'User-Agent': this.userAgent,
       Accept: 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh;q=0.9',
       Referer: 'https://www.douyin.com/',

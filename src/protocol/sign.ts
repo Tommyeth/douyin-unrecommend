@@ -97,6 +97,7 @@ export class Signer {
     public geo = [1920, 855, 1920, 1032, 1920, 1032, 1920, 1080],
     public now = Date.now,
     public random = Math.random,
+    public platform = 'Win32',
   ) {}
   sign(query: string, body = '', host = 'www.douyin.com') {
     const cfg =
@@ -132,7 +133,7 @@ export class Signer {
     L[66] = 3;
     put(67, cfg[5], 4);
     put(71, cfg[4], 4);
-    const geo = bytes([...this.geo, 'Win32'].join('|')),
+    const geo = bytes([...this.geo, this.platform].join('|')),
       suffix = bytes(String((t + 3) & 255) + ',');
     put(79, geo.length, 2);
     put(84, suffix.length, 2);

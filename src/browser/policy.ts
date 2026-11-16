@@ -1,7 +1,7 @@
 import schedule from '../vercel/schedule-policy.json' with { type: 'json' };
 
 export type BrowserPolicy = {
-  runtime: 'vercel-chromium' | 'docker-chromium';
+  runtime: 'vercel-chromium' | 'docker-chromium' | 'cloudflare-hybrid';
   minimumInterval: number;
   intervalStep: number;
   triggerSeconds: number;

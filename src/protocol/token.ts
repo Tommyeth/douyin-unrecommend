@@ -3,7 +3,6 @@
 import profile from './device-profile.json';
 import { SafeError } from '../types.js';
 import type { Http } from './http.js';
-import { UA } from './sign.js';
 
 const alphabet = 'Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe';
 export function tokenReport(plaintext: string, nonce: number) {
@@ -31,7 +30,7 @@ export async function refreshToken(http: Http) {
     n = p.nWID as typeof p.nWID & { custom?: string };
   const version = n.ms_version;
   delete (n as Partial<typeof n>).ms_version;
-  n.navigator.userAgent = UA;
+  n.navigator.userAgent = http.userAgent;
   n.custom = JSON.stringify({
     version,
     fxgDid: '',
