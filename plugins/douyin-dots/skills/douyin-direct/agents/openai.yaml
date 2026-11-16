@@ -1,0 +1,4 @@
+interface:
+  display_name: '抖音推荐 · 云浏览器'
+  short_description: '用 Dots 云浏览器读取自己的推荐，发现新增时提醒，或按已授权设置取消推荐'
+  default_prompt: '使用 $douyin-direct，在你的云浏览器检查我的抖音推荐，先确认账号和当前模式。'

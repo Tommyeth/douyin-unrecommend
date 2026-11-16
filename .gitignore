@@ -20,6 +20,8 @@ auth.json
 storage-state.json
 screenshots/
 .DS_Store
+__pycache__/
+*.pyc
 
 .vercel/
 public/LICENSE.txt

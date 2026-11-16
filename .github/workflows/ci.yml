@@ -18,6 +18,11 @@ jobs:
       - run: node --input-type=module -e "import('./src/browser/policy.ts')"
       - run: npm run build:vercel
       - run: npm run build:desktop
+      - run: npm run build:dots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: douyin-dots
+          path: dist/douyin-dots-*.zip
       - run: npx playwright-core install --with-deps chromium
       - run: npm test
       - run: npm run test:worker
