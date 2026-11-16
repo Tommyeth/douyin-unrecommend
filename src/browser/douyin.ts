@@ -1,6 +1,6 @@
 import type { BrowserContext, Page, Response } from 'playwright-core';
 import type { Config } from '../config.js';
-import { digest } from '../crypto.js';
+import { readAccount, type AccountIdentity } from './profile.js';
 import { SafeError, type Snapshot, type Video } from '../types.js';
 
 export const HOME = 'https://www.douyin.com/user/self?from_tab_name=main&showTab=recommend';
@@ -56,19 +56,7 @@ export function cancelURL(feedURL: string) {
 export const LIST = '#user_detail_element [data-e2e="user-like-list"] [data-e2e="scroll-list"]';
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export async function identity(page: Page, timeout = 10000): Promise<string> {
-  const info = page.locator('#user_detail_element [data-e2e="user-info"]');
-  try {
-    await info.waitFor({ state: 'visible', timeout });
-    const text = await info.innerText();
-    const id = text.match(/抖音号[：:]\s*([A-Za-z0-9_.-]+)/)?.[1];
-    if (!id) throw new Error();
-    return await digest(id);
-  } catch {
-    throw new SafeError(
-      'LOGIN_REQUIRED',
-      '无法确认本人登录状态，请扫码登录；如有验证码，请在抖音官方页面人工处理。',
-    );
-  }
+  return (await readAccount(page, timeout)).account;
 }
 
 export class Douyin {
@@ -84,8 +72,18 @@ export class Douyin {
   constructor(
     public page: Page,
     public cfg: Config,
+    private onAccount?: (page: Page, owner: AccountIdentity) => Promise<void>,
   ) {
     page.setDefaultTimeout(cfg.timeout);
+  }
+  private async identify() {
+    const owner = await readAccount(this.page);
+    await this.onAccount?.(this.page, owner);
+    return owner.account;
+  }
+  async refreshAccount() {
+    await this.page.goto(HOME, { waitUntil: 'commit' });
+    await this.identify();
   }
   async scan(): Promise<Snapshot> {
     this.diagnostic = { stage: 'navigation', requests: 0, responses: 0 };
@@ -117,7 +115,7 @@ export class Douyin {
     try {
       await page.goto(HOME, { waitUntil: 'commit' });
       this.diagnostic.stage = 'identity';
-      const account = await identity(page);
+      const account = await this.identify();
       this.diagnostic.stage = 'tab';
       if ((await page.locator('#semiTabrecommend').getAttribute('aria-selected')) !== 'true')
         throw new SafeError('WRONG_TAB', '未进入个人推荐标签，停止读取。');
