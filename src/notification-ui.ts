@@ -1,0 +1,39 @@
+export const notificationStyles = `
+.notice-layout{display:grid;grid-template-columns:minmax(180px,.8fr) minmax(0,1.2fr);gap:24px}.notice-list{margin:0;padding:0;list-style:none}.notice-list li{border-bottom:1px solid #eceeea;padding:12px 0;display:flex;align-items:center;gap:10px}.notice-list li span{flex:1;overflow-wrap:anywhere}.notice-list button{padding:5px 8px;font-size:12px}.notice-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.notice-grid .field{margin:0}.notice-grid input,.notice-grid select{width:100%;max-width:none}.notice-grid .wide{grid-column:1/-1}#noticeForm{border:1px solid #e4e6e0;background:#fafbf8;border-radius:5px;padding:16px}#noticeState{font-size:12px;color:#526d59}.notice-help{font-size:12px;margin:12px 0 0}#noticeClearToken{width:auto}#noticeEmpty{font-size:12px}@media(max-width:700px){.notice-layout,.notice-grid{grid-template-columns:1fr}.notice-grid .wide{grid-column:auto}}
+`;
+export const notificationMarkup = `
+<section class="panel" id="notifications"><div class="panel-head"><h2>消息通知</h2><span class="muted" id="noticeSource">读取配置后显示</span></div><div class="panel-body">
+<p class="section-note">配置渠道后，新增推荐、取消结果和任务错误会发送消息。检测到登录失效会提醒重新扫码；未配置渠道时不发送。</p>
+<div class="notice-layout"><div><ul class="notice-list" id="noticeList"></ul><p id="noticeEmpty">暂无通知渠道</p><div class="actions"><button class="secondary" id="noticeAdd" type="button">添加渠道</button></div></div>
+<div id="noticeForm" hidden><div class="notice-grid">
+<div class="field"><label for="noticeName">渠道名称</label><input id="noticeName" maxlength="64" placeholder="例如：我的手机"></div>
+<div class="field"><label for="noticeType">渠道类型</label><select id="noticeType"><option value="bark">Bark</option><option value="wecom">企业微信机器人</option><option value="webhook">Webhook</option><option value="smtp">SMTP 邮箱</option></select></div>
+<div class="field wide" data-notice="bark wecom webhook"><label for="noticeUrl">服务地址 / 机器人 Webhook</label><input id="noticeUrl" type="password" autocomplete="new-password" maxlength="2048" placeholder="https://…"></div>
+<div class="field wide" data-notice="bark"><label for="noticeKey">Bark Device Key</label><input id="noticeKey" type="password" autocomplete="new-password" maxlength="2048"></div>
+<div class="field wide" data-notice="webhook"><label for="noticeToken">Bearer Token（可选）</label><input id="noticeToken" type="password" autocomplete="new-password" maxlength="2048"><label><input id="noticeClearToken" type="checkbox"> 移除已保存的 Token</label></div>
+<div class="field" data-notice="smtp"><label for="noticeHost">SMTP 主机</label><input id="noticeHost" maxlength="253" placeholder="smtp.example.com"></div>
+<div class="field" data-notice="smtp"><label for="noticePort">端口 · 隐式 TLS</label><input id="noticePort" value="465" disabled></div>
+<div class="field" data-notice="smtp"><label for="noticeUsername">SMTP 用户名</label><input id="noticeUsername" maxlength="320" autocomplete="off"></div>
+<div class="field" data-notice="smtp"><label for="noticePassword">SMTP 密码 / 授权码</label><input id="noticePassword" type="password" autocomplete="new-password" maxlength="2048"></div>
+<div class="field" data-notice="smtp"><label for="noticeFrom">发件邮箱</label><input id="noticeFrom" type="email" maxlength="320"></div>
+<div class="field" data-notice="smtp"><label for="noticeTo">收件邮箱 · 多个用逗号分隔</label><input id="noticeTo" maxlength="3200"></div>
+</div><p class="notice-help" id="noticeHelp"></p><div class="actions"><button id="noticeApply" type="button">加入待保存配置</button><button id="noticeCancel" class="secondary" type="button">收起</button></div></div></div>
+<p id="noticeState" role="status"></p><div class="actions"><button id="noticeSave" type="button">保存通知设置</button><button id="noticeTest" class="secondary" type="button">测试已保存渠道</button><button id="noticeReset" class="secondary" type="button">使用部署配置</button></div>
+<p class="notice-help">保存后立即生效，不需要重新部署。密钥加密保存；编辑时留空表示保留，页面不会回显原值。移除渠道并保存会丢弃该渠道未发送的消息。</p>
+</div></section>`;
+
+export const notificationScript = `
+const noticeTypes={bark:'Bark',wecom:'企业微信机器人',webhook:'Webhook',smtp:'SMTP 邮箱'};
+let noticeDraft=[],noticeEditing=-1;
+const noticeFields={url:'noticeUrl',key:'noticeKey',token:'noticeToken',host:'noticeHost',username:'noticeUsername',password:'noticePassword',from:'noticeFrom'};
+function noticeType(){const type=$('noticeType').value;document.querySelectorAll('[data-notice]').forEach(e=>e.hidden=!e.dataset.notice.split(' ').includes(type));$('noticeHelp').textContent=type==='bark'?'Bark 服务地址通常为 https://api.day.app/push，Device Key 从 Bark App 获取。':type==='wecom'?'粘贴企业微信群机器人的完整 Webhook 地址（包含 key）。':type==='smtp'?'使用邮件服务商提供的 SMTP 授权码，当前支持 465 端口 TLS。':'使用 HTTPS 地址；项目会 POST JSON，Token 配置后通过 Authorization: Bearer 发送。';}
+function noticeClose(){$('noticeForm').hidden=true;for(const id of Object.values(noticeFields))$(id).value='';$('noticeTo').value='';$('noticeClearToken').checked=false;noticeEditing=-1;}
+function noticeEdit(index){noticeClose();noticeEditing=index;const c=noticeDraft[index]||{type:'bark'};$('noticeName').value=c.name||'';$('noticeName').disabled=index>=0;$('noticeType').value=c.type;$('noticeType').disabled=index>=0;for(const [key,id] of Object.entries(noticeFields)){$(id).value=c[key]||'';$(id).placeholder=c.saved?.[key]?'已保存，留空保留':'';}$('noticeTo').value=(c.to||[]).join(', ');if(index<0)$('noticeUrl').value='https://api.day.app/push';$('noticeForm').hidden=false;noticeType();$('noticeName').focus();}
+function noticeRender(){$('noticeList').replaceChildren();$('noticeEmpty').hidden=!!noticeDraft.length;noticeDraft.forEach((c,i)=>{const li=document.createElement('li'),text=document.createElement('span'),edit=document.createElement('button'),remove=document.createElement('button');text.textContent=c.name+' · '+noticeTypes[c.type];edit.textContent='编辑';edit.className='secondary';edit.onclick=()=>noticeEdit(i);remove.textContent='移除';remove.className='danger';remove.onclick=()=>{noticeDraft.splice(i,1);noticeClose();noticeRender();$('noticeState').textContent='有未保存的更改。';};li.append(text,edit,remove);$('noticeList').append(li);});$('noticeAdd').disabled=noticeDraft.length>=8;}
+async function loadNotifications(){const data=await(await api('notifications/config')).json();noticeDraft=data.channels;noticeClose();noticeRender();$('noticeSource').textContent=data.source==='panel'?'使用面板配置':'使用部署配置';$('noticeState').textContent=noticeDraft.length?'已配置 '+noticeDraft.length+' 个渠道，登录失效提醒已启用。':'未配置通知渠道，登录失效也不会发送消息。';}
+$('noticeAdd').onclick=()=>noticeEdit(-1);$('noticeCancel').onclick=noticeClose;$('noticeType').onchange=()=>{if(noticeEditing<0)$('noticeUrl').value=$('noticeType').value==='bark'?'https://api.day.app/push':'';noticeType();};
+$('noticeApply').onclick=()=>{const name=$('noticeName').value.trim();if(!name){message('请填写渠道名称。');return;}if(noticeDraft.some((c,i)=>c.name===name&&i!==noticeEditing)){message('渠道名称不能重复。');return;}const c={...(noticeDraft[noticeEditing]||{}),name,type:$('noticeType').value};for(const [key,id] of Object.entries(noticeFields)){const value=$(id).value;if(value)c[key]=value;}if(c.type==='smtp'){c.port=465;c.to=$('noticeTo').value.split(/[,，;；]/).map(x=>x.trim()).filter(Boolean);}if(c.type==='webhook'&&$('noticeClearToken').checked)c.token='';if(noticeEditing<0)noticeDraft.push(c);else noticeDraft[noticeEditing]=c;noticeClose();noticeRender();$('noticeState').textContent='有未保存的更改，请点击“保存通知设置”。';};
+$('noticeSave').onclick=()=>run($('noticeSave'),async()=>{if(!$('noticeForm').hidden)throw Error('请先将当前渠道加入待保存配置，或收起编辑栏。');await api('notifications/config','POST',{channels:noticeDraft});await loadNotifications();await status();message('通知设置已保存，后续任务使用新配置。');});
+$('noticeReset').onclick=()=>run($('noticeReset'),async()=>{await api('notifications/config','POST',{source:'environment'});await loadNotifications();await status();message('已恢复使用部署环境中的通知配置。');});
+$('noticeTest').onclick=()=>{$('test').click();};
+`;

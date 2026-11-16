@@ -1,6 +1,6 @@
 // mssdk report encoder adapted from yunsur/douyin-mcp (MIT).
 // Copyright (c) 2026 Yunsur. See THIRD_PARTY_NOTICES.md.
-import profile from './device-profile.json';
+import profile from './device-profile.json' with { type: 'json' };
 import { SafeError } from '../types.js';
 import type { Http } from './http.js';
 

@@ -1,16 +1,50 @@
 import type { Page } from 'playwright-core';
 import { SafeError } from '../types.js';
 
+const keys = [
+  'Enter',
+  'Tab',
+  'Shift+Tab',
+  'Backspace',
+  'Delete',
+  'Escape',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+  'ControlOrMeta+A',
+] as const;
 type Action =
   | { action: 'click'; x: number; y: number }
+  | { action: 'drag'; x: number; y: number; toX: number; toY: number }
+  | { action: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
   | { action: 'text'; text: string; submit?: boolean }
   | { action: 'check' }
-  | { action: 'key'; key: 'Enter' | 'Tab' | 'Backspace' | 'Escape' };
+  | { action: 'key'; key: (typeof keys)[number] };
 export type LoginInput = { session: string; id: string; frame: string } & Action;
 export type LoginControl = {
   session: string;
   poll(): Promise<{ cancelled: boolean; input: LoginInput | null }>;
 };
+const preparedPages = new WeakSet<Page>();
+async function activatePage(page: Page) {
+  await page.bringToFront();
+  if (preparedPages.has(page)) return;
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    preparedPages.add(page);
+    page.once('close', () => {
+      void session.detach().catch(() => {});
+    });
+  } catch (error) {
+    await session.detach().catch(() => {});
+    throw error;
+  }
+}
+
 const uuid = (x: unknown): x is string => typeof x === 'string' && /^[a-f\d-]{36}$/i.test(x);
 async function hasFocusedInput(page: Page) {
   for (const frame of page.frames()) {
@@ -40,6 +74,14 @@ export function parseLoginInput(raw: unknown): LoginInput {
     throw new SafeError('INPUT', '验证操作缺少会话或画面编号。', 400);
   const base = { session: c.session, id: c.id, frame: c.frame };
   if (c.action === 'check') return { ...base, action: 'check' };
+  const unit = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+  const delta = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1200;
+  if (c.action === 'drag' && unit(c.x) && unit(c.y) && unit(c.toX) && unit(c.toY))
+    return { ...base, action: 'drag', x: c.x, y: c.y, toX: c.toX, toY: c.toY };
+  if (c.action === 'wheel' && unit(c.x) && unit(c.y) && delta(c.deltaX) && delta(c.deltaY))
+    return { ...base, action: 'wheel', x: c.x, y: c.y, deltaX: c.deltaX, deltaY: c.deltaY };
   if (
     c.action === 'click' &&
     typeof c.x === 'number' &&
@@ -65,8 +107,8 @@ export function parseLoginInput(raw: unknown): LoginInput {
       text: c.text,
       ...(c.submit === true ? { submit: true } : {}),
     };
-  if (c.action === 'key' && ['Enter', 'Tab', 'Backspace', 'Escape'].includes(String(c.key)))
-    return { ...base, action: 'key', key: c.key as 'Enter' | 'Tab' | 'Backspace' | 'Escape' };
+  if (c.action === 'key' && keys.includes(c.key as (typeof keys)[number]))
+    return { ...base, action: 'key', key: c.key as (typeof keys)[number] };
   throw new SafeError('INPUT', '仅支持画面点击、最多 128 字符文本及指定按键。', 400);
 }
 export async function applyLoginInput(
@@ -82,6 +124,7 @@ export async function applyLoginInput(
     !(url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com'))
   )
     throw new SafeError('INPUT_ORIGIN', '页面已离开抖音域名，停止验证操作。');
+  await activatePage(page);
   // Only user-supplied actions are relayed. No recognition, answer selection or automatic retry.
   if (input.action === 'click') {
     const size = page.viewportSize()!;
@@ -89,6 +132,44 @@ export async function applyLoginInput(
       Math.min(size.width - 1, input.x * size.width),
       Math.min(size.height - 1, input.y * size.height),
     );
+    // Some login widgets suppress the click's default focus. Only focus an
+    // editable element at the exact user-selected point, never pick a field.
+    if (!(await hasFocusedInput(page)))
+      await page.evaluate(
+        ({ x, y }) => {
+          let el = document.elementFromPoint(x, y);
+          while (el?.shadowRoot) {
+            const inner = el.shadowRoot.elementFromPoint(x, y);
+            if (!inner || inner === el) break;
+            el = inner;
+          }
+          if (
+            (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
+            !el.disabled &&
+            !el.readOnly
+          )
+            el.focus();
+          else if (el instanceof HTMLElement && el.isContentEditable) el.focus();
+        },
+        {
+          x: Math.min(size.width - 1, input.x * size.width),
+          y: Math.min(size.height - 1, input.y * size.height),
+        },
+      );
+  } else if (input.action === 'drag' || input.action === 'wheel') {
+    const size = page.viewportSize()!;
+    const x = (v: number) => Math.min(size.width - 1, v * size.width);
+    const y = (v: number) => Math.min(size.height - 1, v * size.height);
+    await page.mouse.move(x(input.x), y(input.y));
+    if (input.action === 'wheel') await page.mouse.wheel(input.deltaX, input.deltaY);
+    else {
+      await page.mouse.down();
+      try {
+        await page.mouse.move(x(input.toX), y(input.toY), { steps: 12 });
+      } finally {
+        await page.mouse.up();
+      }
+    }
   } else if (input.action === 'text') {
     if (!(await hasFocusedInput(page)))
       throw new SafeError(

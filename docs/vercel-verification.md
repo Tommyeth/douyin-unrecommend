@@ -1,4 +1,6 @@
-# Vercel Chromium 验证记录
+# Vercel Chromium 验证记录（历史版本）
+
+这份记录对应日常任务仍使用浏览器的旧版；当前实现与验收见 [Vercel 混合版](vercel-hybrid-verification.md)。
 
 日期：2026-11-16（Australia/Sydney）。仅记录结果，不记录账号、Cookie、二维码、口令或请求签名。
 

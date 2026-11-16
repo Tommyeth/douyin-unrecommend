@@ -16,6 +16,7 @@ export class HybridService extends Workflow {
     store: Store,
     mail: MailConnect,
     private transport: typeof fetch = fetch,
+    private runtime: 'cloudflare-hybrid' | 'vercel-hybrid' = 'cloudflare-hybrid',
   ) {
     super(cfg, store, mail);
   }
@@ -31,11 +32,11 @@ export class HybridService extends Workflow {
     const login = JSON.parse((await this.store.get('login')) ?? 'null');
     return {
       ...status,
-      runtime: 'cloudflare-hybrid',
+      runtime: this.runtime,
       sessionPending: !!(await this.store.get('candidate_auth')),
       loginActive: !!login && login.expires > Date.now(),
       browserStarts: Number((await this.store.get('browser_starts')) ?? 0),
-      execution: 'worker-fetch',
+      execution: this.runtime === 'cloudflare-hybrid' ? 'worker-fetch' : 'node-fetch',
       scheduleDiagnostic: JSON.parse((await this.store.get('schedule_diagnostic')) ?? 'null'),
       protocolDiagnostic: JSON.parse((await this.store.get('protocol_diagnostic')) ?? 'null'),
       profile: p
@@ -53,11 +54,15 @@ export class HybridService extends Workflow {
       throw new SafeError('SETTINGS', '此部署每 15 分钟调度，间隔需为 900 秒的整数倍。', 400);
     return super.setSettings(mode, interval);
   }
-  private async execute<T>(state: HybridSession, fn: (bot: Douyin) => Promise<T>) {
+  private async execute<T>(
+    state: HybridSession,
+    fn: (bot: Douyin) => Promise<T>,
+    timeout = 120000,
+  ) {
     assertSession(state);
-    const signal = AbortSignal.timeout(120000);
+    const signal = AbortSignal.timeout(timeout);
     const diagnostic = {
-      transport: 'worker-fetch',
+      transport: this.runtime === 'cloudflare-hybrid' ? 'worker-fetch' : 'node-fetch',
       requests: 0,
       path: '',
       http: 0,
@@ -109,13 +114,13 @@ export class HybridService extends Workflow {
       await this.store.set('auth', await seal(state, this.cfg.authSecret));
     }
   }
-  async validateCandidate() {
+  async validateCandidate(timeout = 120000) {
     return this.store.lock(async () => {
       const raw = await this.store.get('candidate_auth');
       if (!raw) throw new SafeError('LOGIN_REQUIRED', '没有等待验证的扫码会话。');
       const state = await unseal<HybridSession>(raw, this.cfg.authSecret);
       try {
-        const snapshot = await this.execute(state, (bot) => bot.scan());
+        const snapshot = await this.execute(state, (bot) => bot.scan(), timeout);
         const bound = await this.store.get('account');
         if (snapshot.account !== state.account || (bound && bound !== state.account))
           throw new SafeError('ACCOUNT_CHANGED', '浏览器与纯协议确认的账号不同，停止保存。');

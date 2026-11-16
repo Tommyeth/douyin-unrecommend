@@ -1,3 +1,4 @@
+import { vercelPolicy } from '../src/browser/policy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
@@ -5,11 +6,15 @@ import { serve } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { digest, seal } from '../src/crypto.js';
 import { captureProfile, readAccount, type AccountProfile } from '../src/browser/profile.js';
-import { vercelApp } from '../src/vercel/app.js';
+import { vercelApp as createVercelApp } from '../src/vercel/app.js';
 import { changeState, readState, emptyState, type StateBackend } from '../src/vercel/state.js';
 import { SafeError } from '../src/types.js';
 import type { BrowserService } from '../src/browser/service.js';
 type Status = Awaited<ReturnType<BrowserService['status']>>;
+
+// Legacy Chromium contracts remain covered independently of the hybrid flow.
+const vercelApp = (...args: Parameters<typeof createVercelApp>) =>
+  createVercelApp(args[0], args[1], args[2], { ...args[3], policy: vercelPolicy });
 
 const env = {
   ADMIN_TOKEN: 'profile-fixture-admin-'.repeat(3),

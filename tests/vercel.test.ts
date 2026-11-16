@@ -1,3 +1,4 @@
+import { vercelPolicy } from '../src/browser/policy.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Script } from 'node:vm';
@@ -12,7 +13,7 @@ import {
   type StateBackend,
 } from '../src/vercel/state.js';
 import { renderHtml } from '../src/ui.js';
-import { vercelApp, scheduledPoll } from '../src/vercel/app.js';
+import { vercelApp as createVercelApp, scheduledPoll } from '../src/vercel/app.js';
 import { SafeError } from '../src/types.js';
 import { BrowserService } from '../src/browser/service.js';
 import { config } from '../src/config.js';
@@ -27,6 +28,10 @@ import { flush } from '../src/notify.js';
 import { parseLoginInput, applyLoginInput } from '../src/browser/input.js';
 import { serve } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
+
+// Legacy Chromium contracts remain covered independently of the hybrid flow.
+const vercelApp = (...args: Parameters<typeof createVercelApp>) =>
+  createVercelApp(args[0], args[1], args[2], { ...args[3], policy: vercelPolicy });
 
 const env = { ADMIN_TOKEN: 'a'.repeat(40), AUTH_SECRET: 'b'.repeat(40) };
 function backend() {
@@ -635,6 +640,138 @@ test('独立取消请求无需断开原连接即可关闭 Chromium 并释放租�
     );
     assert.equal(await readState(b, async (_s, busy) => busy), false);
     assert.equal(browser.isConnected(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('连续截图失败超过三次仍保留登录窗口，恢复后可正常取消', { timeout: 20000 }, async () => {
+  const b = backend();
+  const browser = await loginBrowser(false);
+  const originalContext = browser.newContext.bind(browser);
+  let attempts = 0,
+    sawImage = false;
+  browser.newContext = async (options) => {
+    const context = await originalContext(options);
+    const newPage = context.newPage.bind(context);
+    context.newCDPSession = async () => {
+      throw Error('Unable to capture screenshot');
+    };
+    context.newPage = async () => {
+      const page = await newPage();
+      const screenshot = page.screenshot.bind(page);
+      page.screenshot = async (options) => {
+        if (++attempts <= 4) throw Error('Unable to capture screenshot');
+        return screenshot(options);
+      };
+      return page;
+    };
+    return context;
+  };
+  const controller = new AbortController();
+  try {
+    await assert.rejects(
+      changeState(b, async (store) => {
+        const s = new BrowserService(
+          config(env),
+          store,
+          () => {
+            throw Error('Unexpected SMTP');
+          },
+          async () => browser,
+        );
+        await s.login(controller.signal, (event) => {
+          if (event.type === 'image') {
+            sawImage = true;
+            controller.abort();
+          }
+        });
+      }),
+      /扫码连接已关闭/,
+    );
+    assert.equal(sawImage, true);
+    assert.ok(attempts > 4);
+    assert.equal(browser.isConnected(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('远程滚动与拖动只接受有界坐标，在同一登录画面执行真实鼠标事件', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.route('**/*', (r) =>
+      r.fulfill({
+        contentType: 'text/html',
+        body: '<style>body{height:3000px}input{position:absolute;left:40px;top:100px;width:200px;height:30px}</style><input type="range" min="0" max="100" value="0">',
+      }),
+    );
+    await page.goto('https://www.douyin.com/');
+    const base = {
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame: crypto.randomUUID(),
+    };
+    for (const action of [
+      { action: 'wheel', x: 0, y: 0, deltaX: 0, deltaY: Infinity },
+      { action: 'drag', x: 0, y: 0, toX: 2, toY: 0 },
+      { action: 'key', key: 'ControlOrMeta+L' },
+    ])
+      assert.throws(() => parseLoginInput({ ...base, ...action }));
+    const drag = parseLoginInput({
+      ...base,
+      action: 'drag',
+      x: 50 / 800,
+      y: 117 / 600,
+      toX: 220 / 800,
+      toY: 117 / 600,
+    });
+    await applyLoginInput(page, drag, base.frame);
+    assert.ok(Number(await page.locator('input').inputValue()) > 70);
+    const wheel = parseLoginInput({
+      ...base,
+      action: 'wheel',
+      x: 0.7,
+      y: 0.7,
+      deltaX: 0,
+      deltaY: 500,
+    });
+    await applyLoginInput(page, wheel, base.frame);
+    await page.waitForFunction(() => window.scrollY > 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('远程点击仅恢复鼠标所在可编辑框的焦点，页面阻止默认聚焦后仍可输入', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.route('**/*', (r) =>
+      r.fulfill({
+        contentType: 'text/html',
+        body: '<style>input{position:absolute;left:200px;top:200px;width:200px;height:30px}</style><input onmousedown="event.preventDefault()">',
+      }),
+    );
+    await page.goto('https://www.douyin.com/');
+    const base = {
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame: crypto.randomUUID(),
+    };
+    const clicked = await applyLoginInput(
+      page,
+      parseLoginInput({ ...base, action: 'click', x: 300 / 800, y: 215 / 600 }),
+      base.frame,
+    );
+    assert.equal(clicked.focusedInput, true);
+    await applyLoginInput(
+      page,
+      parseLoginInput({ ...base, action: 'text', text: 'fixture' }),
+      base.frame,
+    );
+    assert.equal(await page.locator('input').inputValue(), 'fixture');
   } finally {
     await browser.close();
   }

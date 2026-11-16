@@ -15,8 +15,9 @@ import { launchBrowser, type LaunchBrowser } from './launch.js';
 import { flush } from '../notify.js';
 import { applyLoginInput, type LoginControl } from './input.js';
 import { vercelPolicy, type BrowserPolicy } from './policy.js';
+import { captureLoginImage, transientCaptureError } from './screenshot.js';
 
-type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
+export type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export type LoginEvent = {
   type: 'waiting' | 'image' | 'confirmed' | 'input';
   image?: string;
@@ -27,6 +28,7 @@ export type LoginEvent = {
   id?: string;
   message?: string;
   focusedInput?: boolean;
+  code?: string;
 };
 export class BrowserService extends Workflow {
   private readonly notificationDeadline = Date.now() + 250000;
@@ -34,7 +36,7 @@ export class BrowserService extends Workflow {
     cfg: Config,
     store: Store,
     mail: MailConnect,
-    private launch: LaunchBrowser = launchBrowser,
+    protected launch: LaunchBrowser = launchBrowser,
     private policy: BrowserPolicy = vercelPolicy,
   ) {
     super(cfg, store, mail);
@@ -45,8 +47,14 @@ export class BrowserService extends Workflow {
         400,
       );
   }
-  protected flushNotifications() {
-    return flush(this.store, this.cfg.channels, this.mail, Date.now(), this.notificationDeadline);
+  protected async flushNotifications() {
+    return flush(
+      this.store,
+      await this.notificationChannels(),
+      this.mail,
+      Date.now(),
+      this.notificationDeadline,
+    );
   }
   private async storedProfile(): Promise<AccountProfile | null> {
     const raw = await this.store.get('account_profile');
@@ -112,7 +120,7 @@ export class BrowserService extends Workflow {
       );
     return super.setSettings(mode, interval);
   }
-  private async context(browser: Browser, storageState?: StorageState) {
+  protected async context(browser: Browser, storageState?: StorageState) {
     const context = await browser.newContext({
       storageState,
       locale: 'zh-CN',
@@ -122,6 +130,12 @@ export class BrowserService extends Workflow {
       route.request().resourceType() === 'media' ? route.abort() : route.continue(),
     );
     return context;
+  }
+  protected async saveLogin(context: BrowserContext, page: Page, owner: AccountIdentity) {
+    const state = await context.storageState({ indexedDB: true });
+    await this.store.set('auth', await seal({ version: 'chromium-1', state }, this.cfg.authSecret));
+    await this.store.set('account', owner.account);
+    await this.updateProfile(page, owner);
   }
   async login(signal: AbortSignal, emit: (event: LoginEvent) => void, control?: LoginControl) {
     const expires = Date.now() + this.policy.loginTimeout;
@@ -146,7 +160,6 @@ export class BrowserService extends Workflow {
       const page = await prepareLogin(context);
       emit({ type: 'waiting', expires });
       let previousImage = '';
-      let screenshotFailures = 0;
       let frame = '';
       let frames: { id: string; url: string; at: number }[] = [];
       let nextImage = 0;
@@ -185,13 +198,7 @@ export class BrowserService extends Workflow {
           const bound = await this.store.get('account');
           if (bound && bound !== account)
             throw new SafeError('ACCOUNT_CHANGED', '请使用此前绑定的抖音账号扫码。');
-          const state = await context.storageState({ indexedDB: true });
-          await this.store.set(
-            'auth',
-            await seal({ version: 'chromium-1', state }, this.cfg.authSecret),
-          );
-          await this.store.set('account', account);
-          await this.updateProfile(page, owner);
+          await this.saveLogin(context, page, owner);
           await this.store.delete('error');
           await this.store.delete('login_diagnostic');
           await this.store.delete('next_poll');
@@ -206,7 +213,7 @@ export class BrowserService extends Workflow {
               new Set(
                 frames
                   .filter(
-                    (f) => f.url === page.url() && (f.id === frame || Date.now() - f.at < 5000),
+                    (f) => f.url === page.url() && (f.id === frame || Date.now() - f.at < 15000),
                   )
                   .map((f) => f.id),
               ),
@@ -224,6 +231,7 @@ export class BrowserService extends Workflow {
             emit({
               type: 'input',
               id: command.input.id,
+              code: e instanceof SafeError ? e.code : 'INPUT_FAILED',
               message: e instanceof SafeError ? e.message : '操作未完成，请查看画面后手动重试。',
             });
           }
@@ -238,27 +246,30 @@ export class BrowserService extends Workflow {
         phase = 'login_image';
         let image: string;
         try {
-          image = (
-            await page.screenshot({ type: 'jpeg', quality: 85, caret: 'initial', timeout: 2500 })
-          ).toString('base64');
-          screenshotFailures = 0;
+          image = (await captureLoginImage(page)).toString('base64');
         } catch (e) {
           // QR confirmation can navigate while captureScreenshot is in flight.
           if (
-            e instanceof Error &&
-            (e.name === 'TimeoutError' || e.message.includes('Unable to capture screenshot')) &&
+            transientCaptureError(e) &&
             !page.isClosed() &&
             !signal.aborted &&
             !timedOut &&
-            ++screenshotFailures <= 3
+            browser.isConnected()
           ) {
-            emit({ type: 'waiting', expires });
+            frames = [];
+            frame = '';
+            previousImage = '';
+            emit({
+              type: 'waiting',
+              expires,
+              message: '画面暂时不可用，正在恢复；登录窗口仍保持打开，请勿重复提交验证码。',
+            });
             await sleep(1000);
             continue;
           }
           throw e;
         }
-        if (image !== previousImage) {
+        if (image !== previousImage || frames.at(-1)?.url !== page.url()) {
           frame = crypto.randomUUID();
           frames = [...frames, { id: frame, url: page.url(), at: Date.now() }].slice(-3);
           emit({

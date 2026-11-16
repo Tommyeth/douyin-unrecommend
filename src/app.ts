@@ -48,6 +48,12 @@ export function app(service: Service) {
     const body = await c.req.json<{ token: string }>();
     return c.json(await service.clear(body.token));
   });
+  api.get('/api/notifications/config', async (c) => c.json(await service.notificationSettings()));
+  api.post('/api/notifications/config', async (c) => {
+    const body = await c.req.text();
+    if (body.length > 16384) return c.json({ error: 'TOO_LARGE', message: '通知设置过大。' }, 413);
+    return c.json(await service.saveNotificationSettings(JSON.parse(body)));
+  });
   api.post('/api/notifications/test', async (c) => c.json(await service.testNotify()));
   api.onError((e, c) => {
     const err = safeError(e);

@@ -17,6 +17,8 @@ jobs:
       - run: npm run check
       - run: node --input-type=module -e "import('./src/browser/policy.ts')"
       - run: npm run build:vercel
+      - run: npx tsc --noEmit false --outDir dist/node-check
+      - run: node --input-type=module -e "import('./dist/node-check/src/vercel/app.js')"
       - run: npm run build:desktop
       - run: npm run build:dots
       - uses: actions/upload-artifact@v4

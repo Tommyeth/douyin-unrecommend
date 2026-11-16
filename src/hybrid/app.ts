@@ -38,7 +38,10 @@ export function hybridApp(
       return c.json({ error: 'UNAUTHORIZED', message: '管理员口令无效。' }, 401);
     if (c.req.header('Origin') && c.req.header('Origin') !== new URL(c.req.url).origin)
       return c.json({ error: 'ORIGIN' }, 403);
-    if (Number(c.req.header('Content-Length') ?? 0) > 2048)
+    if (
+      Number(c.req.header('Content-Length') ?? 0) >
+      (c.req.path === '/api/notifications/config' ? 16384 : 2048)
+    )
       return c.json({ error: 'TOO_LARGE' }, 413);
     await next();
   });
@@ -63,6 +66,12 @@ export function hybridApp(
   api.post('/api/poll', async (c) => c.json(await service.poll()));
   api.post('/api/clear/preview', async (c) => c.json(await service.preview()));
   api.post('/api/clear', async (c) => c.json(await service.clear((await c.req.json()).token)));
+  api.get('/api/notifications/config', async (c) => c.json(await service.notificationSettings()));
+  api.post('/api/notifications/config', async (c) => {
+    const body = await c.req.text();
+    if (body.length > 16384) return c.json({ error: 'TOO_LARGE', message: '通知设置过大。' }, 413);
+    return c.json(await service.saveNotificationSettings(JSON.parse(body)));
+  });
   api.post('/api/notifications/test', async (c) => c.json(await service.testNotify()));
   api.post('/api/account/refresh', async (c) => c.json(await service.refreshProfile()));
   api.get('/api/account/avatar', async (c) => {

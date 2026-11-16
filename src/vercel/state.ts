@@ -170,7 +170,7 @@ export async function queueLoginInput(backend: StateBackend, raw: unknown) {
     if (lease.input?.id === input.id || lease.inputIds?.includes(input.id))
       return { accepted: true };
     if (lease.input) throw new SafeError('INPUT_BUSY', '上一项操作仍在处理，请稍候。');
-    if ((lease.inputIds?.length ?? 0) >= 40)
+    if ((lease.inputIds?.length ?? 0) >= 200)
       throw new SafeError('INPUT_LIMIT', '本次操作已达上限，请重新扫码。');
     lease.input = input;
     try {
