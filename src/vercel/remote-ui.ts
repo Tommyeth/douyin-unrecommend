@@ -17,13 +17,13 @@ export const remoteMarkup = `
 export const remoteScript = `
 const remoteDialog=$('remoteWindow'),remoteStage=$('remoteStage'),remoteKeys=$('remoteKeys');
 const originalScreenParent=$('screenViewport').parentElement;
-let commandQueue=[],typed='',typingTimer=null,composing=false,pointerStart=null,wheelTimer=null,wheel=null;
+let firstRemoteFrame=true,commandQueue=[],typed='',typingTimer=null,composing=false,pointerStart=null,wheelTimer=null,wheel=null;
 function remoteNotice(text){$('remoteNotice').textContent=text;}
 function drainRemote(){if(!loginAbort||!inputReady||inputPending||!commandQueue.length)return;const action=commandQueue.shift();void manualInput(action);}
 function queueRemote(action){if(!loginAbort||!loginSession||!loginFrame){remoteNotice('画面尚未就绪，请稍候。');return;}if(commandQueue.length>=24){remoteNotice('操作等待较多，请等待画面响应。');return;}commandQueue.push(action);drainRemote();}
 function flushTyped(){clearTimeout(typingTimer);typingTimer=null;if(typed){const text=typed;typed='';for(let i=0;i<text.length;i+=128)queueRemote({action:'text',text:text.slice(i,i+128)});}}
 function resetRemote(){commandQueue=[];typed='';clearTimeout(typingTimer);clearTimeout(wheelTimer);typingTimer=null;wheelTimer=null;wheel=null;pointerStart=null;composing=false;remoteKeys.value='';$('remoteText').value='';$('remoteLoading').textContent='正在打开 Chromium，等待画面…';}
-function openRemote(){if(!remoteDialog.open){remoteStage.append($('screenViewport'));$('qr').classList.remove('zoomed');remoteDialog.showModal();}$('remoteLoading').hidden=!$('qr').hidden;}
+function openRemote(){if($('qr').hidden)firstRemoteFrame=true;if(!remoteDialog.open){remoteStage.append($('screenViewport'));$('qr').classList.remove('zoomed');remoteDialog.showModal();}$('remoteLoading').hidden=!$('qr').hidden;}
 function closeRemote(){flushTyped();remoteDialog.close();originalScreenParent.append($('screenViewport'));}
 const point=e=>{const r=$('qr').getBoundingClientRect();return{x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};};
 $('qr').onclick=e=>{if(!remoteDialog.open){const p=point(e);void manualInput({action:'click',...p});}};
@@ -40,7 +40,7 @@ $('remoteBack').onclick=closeRemote;$('openRemote').onclick=openRemote;$('remote
 $('remoteSend').onclick=()=>{flushTyped();const text=$('remoteText').value;$('remoteText').value='';if(text)queueRemote({action:'text',text,submit:true});};
 remoteControl={open:openRemote,reset:resetRemote,isOpen:()=>remoteDialog.open,
 clock:text=>{$('remoteClock').textContent=text;},notice:remoteNotice,
-frame:()=>{$('remoteLoading').hidden=true;$('openRemote').hidden=false;drainRemote();},
+frame:()=>{if(firstRemoteFrame){firstRemoteFrame=false;remoteNotice('点击远端输入框后可直接键入或粘贴。请等待每次操作确认。');}$('remoteLoading').hidden=true;$('openRemote').hidden=false;drainRemote();},
 ack:event=>{if(event.code){resetRemote();remoteNotice(event.message);}else remoteNotice(event.focusedInput?'已选中输入框，可直接键入或粘贴。':event.message);},
 end:()=>{resetRemote();$('remoteLoading').textContent='登录窗口已结束，可返回面板查看结果或重新开始。';$('remoteLoading').hidden=false;$('openRemote').hidden=true;}}
 `;

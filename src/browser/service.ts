@@ -207,7 +207,7 @@ export class BrowserService extends Workflow {
               new Set(
                 frames
                   .filter(
-                    (f) => f.url === page.url() && (f.id === frame || Date.now() - f.at < 5000),
+                    (f) => f.url === page.url() && (f.id === frame || Date.now() - f.at < 15000),
                   )
                   .map((f) => f.id),
               ),
@@ -263,7 +263,7 @@ export class BrowserService extends Workflow {
           }
           throw e;
         }
-        if (image !== previousImage) {
+        if (image !== previousImage || frames.at(-1)?.url !== page.url()) {
           frame = crypto.randomUUID();
           frames = [...frames, { id: frame, url: page.url(), at: Date.now() }].slice(-3);
           emit({

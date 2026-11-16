@@ -743,3 +743,36 @@ test('远程滚动与拖动只接受有界坐标，在同一登录画面执行�
     await browser.close();
   }
 });
+
+test('远程点击仅恢复鼠标所在可编辑框的焦点，页面阻止默认聚焦后仍可输入', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.route('**/*', (r) =>
+      r.fulfill({
+        contentType: 'text/html',
+        body: '<style>input{position:absolute;left:200px;top:200px;width:200px;height:30px}</style><input onmousedown="event.preventDefault()">',
+      }),
+    );
+    await page.goto('https://www.douyin.com/');
+    const base = {
+      session: crypto.randomUUID(),
+      id: crypto.randomUUID(),
+      frame: crypto.randomUUID(),
+    };
+    const clicked = await applyLoginInput(
+      page,
+      parseLoginInput({ ...base, action: 'click', x: 300 / 800, y: 215 / 600 }),
+      base.frame,
+    );
+    assert.equal(clicked.focusedInput, true);
+    await applyLoginInput(
+      page,
+      parseLoginInput({ ...base, action: 'text', text: 'fixture' }),
+      base.frame,
+    );
+    assert.equal(await page.locator('input').inputValue(), 'fixture');
+  } finally {
+    await browser.close();
+  }
+});

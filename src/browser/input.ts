@@ -28,6 +28,23 @@ export type LoginControl = {
   session: string;
   poll(): Promise<{ cancelled: boolean; input: LoginInput | null }>;
 };
+const preparedPages = new WeakSet<Page>();
+async function activatePage(page: Page) {
+  await page.bringToFront();
+  if (preparedPages.has(page)) return;
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    preparedPages.add(page);
+    page.once('close', () => {
+      void session.detach().catch(() => {});
+    });
+  } catch (error) {
+    await session.detach().catch(() => {});
+    throw error;
+  }
+}
+
 const uuid = (x: unknown): x is string => typeof x === 'string' && /^[a-f\d-]{36}$/i.test(x);
 async function hasFocusedInput(page: Page) {
   for (const frame of page.frames()) {
@@ -107,6 +124,7 @@ export async function applyLoginInput(
     !(url.hostname === 'douyin.com' || url.hostname.endsWith('.douyin.com'))
   )
     throw new SafeError('INPUT_ORIGIN', '页面已离开抖音域名，停止验证操作。');
+  await activatePage(page);
   // Only user-supplied actions are relayed. No recognition, answer selection or automatic retry.
   if (input.action === 'click') {
     const size = page.viewportSize()!;
@@ -114,6 +132,30 @@ export async function applyLoginInput(
       Math.min(size.width - 1, input.x * size.width),
       Math.min(size.height - 1, input.y * size.height),
     );
+    // Some login widgets suppress the click's default focus. Only focus an
+    // editable element at the exact user-selected point, never pick a field.
+    if (!(await hasFocusedInput(page)))
+      await page.evaluate(
+        ({ x, y }) => {
+          let el = document.elementFromPoint(x, y);
+          while (el?.shadowRoot) {
+            const inner = el.shadowRoot.elementFromPoint(x, y);
+            if (!inner || inner === el) break;
+            el = inner;
+          }
+          if (
+            (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
+            !el.disabled &&
+            !el.readOnly
+          )
+            el.focus();
+          else if (el instanceof HTMLElement && el.isContentEditable) el.focus();
+        },
+        {
+          x: Math.min(size.width - 1, input.x * size.width),
+          y: Math.min(size.height - 1, input.y * size.height),
+        },
+      );
   } else if (input.action === 'drag' || input.action === 'wheel') {
     const size = page.viewportSize()!;
     const x = (v: number) => Math.min(size.width - 1, v * size.width);
