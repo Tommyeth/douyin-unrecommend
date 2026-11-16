@@ -25,6 +25,9 @@ jobs:
           path: dist/douyin-dots-*.zip
       - run: npx playwright-core install --with-deps chromium
       - run: npm test
+      - run: npm run test:hybrid
+        env:
+          WRANGLER_SEND_METRICS: 'false'
       - run: npm run test:worker
         env:
           WRANGLER_SEND_METRICS: 'false'

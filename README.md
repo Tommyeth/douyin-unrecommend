@@ -2,20 +2,20 @@
 
 定时读取自己的「个人主页 → 推荐」。支持新增提醒、自动取消、手动预览清理，以及 Bark、企业微信机器人、Webhook、SMTP 通知。
 
-提供两种部署：**Vercel** 无需自备服务器；**VPS Docker** 自带 Chromium 和 noVNC，可直接在面板里操作浏览器。一个部署管理一个抖音账号。
+提供 **Vercel**、**VPS Docker** 和 **[Cloudflare Paid 混合版](docs/cloudflare-hybrid.md)**。Vercel 无需自备服务器；Docker 自带 Chromium 和 noVNC；Cloudflare 使用 Browser Run 扫码、Worker 纯协议执行日常任务。一个部署管理一个抖音账号。Cloudflare 已通过真实扫码、纯协议读取与取消验收，见 [验证记录](docs/cloudflare-hybrid-verification.md)。
 
 另提供实验性的 **[Dots 云浏览器直控版](docs/dots.md)**：由 Dot 自己打开抖音网页、扫码、读取并点击取消，无需以上后台。含中文技能包、提醒/自动取消模式与跨轮状态记录；真实 Dots 云端登录、取消和定时执行仍待验收，不能把技能包已生成当成任务已运行。
 
-连接面板后，运行概况会显示当前管理账号的**头像、昵称、抖音号和资料确认时间**。扫码成功、定时检查时自动更新，也可以点击「更新账号资料」单独读取；旧版保存的登录态无需重新扫码。资料与登录态一起加密保存，仅凭管理员口令可读取。若检测到登录失效，面板会提示重新登录，保留最近确认的账号资料供核对。
+连接面板后，运行概况会显示当前管理账号的**头像、昵称、抖音号和资料确认时间**。Vercel / Docker 在扫码成功、定时检查时自动更新，也可以点击「更新账号资料」单独读取；旧版保存的登录态无需重新扫码。资料与登录态一起加密保存，仅凭管理员口令可读取。若检测到登录失效，面板会提示重新登录，保留最近确认的账号资料供核对。
 
-|                 | Vercel                                 | VPS Docker                                     |
-| --------------- | -------------------------------------- | ---------------------------------------------- |
-| 浏览器          | 函数内真实 Chromium                    | 容器内真实 Chromium                            |
-| 扫码与验证      | 实时截图、点击转发、文字输入栏         | noVNC 桌面，直接点击、键入、拖动；保留截图备用 |
-| 登录窗口        | 约 4 分钟                              | 15 分钟                                        |
-| 检查间隔        | 默认最短 900 秒；付费调度可配置 300 秒 | 最短 **300 秒**，按 60 秒递增                  |
-| 持久化          | 加密 Private Blob                      | 加密 SQLite，Docker 数据卷                     |
-| 默认模式 / 间隔 | 仅提醒 / 3600 秒                       | 仅提醒 / 3600 秒                               |
+|                 | Vercel                                 | VPS Docker                 | Cloudflare Paid 混合版                |
+| --------------- | -------------------------------------- | -------------------------- | ------------------------------------- |
+| 扫码与验证      | Chromium 截图、点击与文字转发          | Chromium + noVNC，直接操作 | Browser Run + Live View；短信备用输入 |
+| 日常读取和取消  | Chromium                               | Chromium                   | Worker 纯协议 fetch                   |
+| 登录窗口        | 约 4 分钟                              | 15 分钟                    | 约 10 分钟                            |
+| 检查间隔        | 默认最短 900 秒；付费调度可配置 300 秒 | 最短 300 秒，按 60 秒递增  | 默认最短 900 秒，按 900 秒递增        |
+| 持久化          | 加密 Private Blob                      | 加密 SQLite，Docker 数据卷 | D1；会话与账号资料加密                |
+| 默认模式 / 间隔 | 仅提醒 / 3600 秒                       | 仅提醒 / 3600 秒           | 自动取消 / 900 秒，不发通知           |
 
 Vercel 已通过真实账号的扫码、短信验证、恢复登录态、读取推荐及取消验收，见 [验证记录](docs/vercel-verification.md)。Docker 共用这些业务代码；容器测试覆盖真实 Chromium + noVNC 输入和模拟登录，不代表已在每个 VPS 网络上完成真实账号验收。
 
@@ -83,7 +83,21 @@ flowchart TB
     Node -->|"按已配置渠道发送"| Notify
 ```
 
-noVNC 的键盘和鼠标操作直接进入容器里的 Chromium，登录窗口最长 15 分钟；日常检查使用无头浏览器，最短间隔 300 秒。登录成功后，两种部署都不需要保持管理页打开。
+noVNC 的键盘和鼠标操作直接进入容器里的 Chromium，登录窗口最长 15 分钟；日常检查使用无头浏览器，最短间隔 300 秒。登录成功后，无需保持管理页打开。
+
+### Cloudflare Paid：扫码用浏览器，日常走协议
+
+```mermaid
+flowchart LR
+    Panel["管理面板"] --> Login["Browser Run + Live View<br/>扫码和人工验证"]
+    Login -->|"保存会话后关闭浏览器"| DB[("D1 · 加密会话")]
+    Cron["Cron · 每 15 分钟"] --> Worker["Worker 纯协议<br/>读取、取消、完整复核"]
+    DB <--> Worker
+    Worker <--> Douyin["抖音接口"]
+    Worker --> Notify["可选通知"]
+```
+
+Worker 先独立验证扫码会话，验证通过才启用任务。日常协议失败会显示原因，不自动改用浏览器处理。部署步骤、完整结构和限制见 [Cloudflare 混合版说明](docs/cloudflare-hybrid.md)。
 
 ## 运行方式
 
@@ -268,6 +282,7 @@ npm run test:worker
 - Docker 桌面集成测试由 GitHub Actions 构建真实镜像，验证 noVNC 点击、直接输入、Enter 提交、加密保存，以及 300 秒设置。使用模拟抖音页面，不连接真实账号。
 - 本地 Node：配置 `.env` 后运行 `npm run dev`；默认无桌面。如自行提供 Xvfb/x11vnc，可设 `DESKTOP_ENABLED=1`。
 - Vercel 本地：`vercel env pull .env.local` 后运行 `npm run dev:vercel`，默认 `127.0.0.1:8791`；请连接开发用私有 Blob。
+- Cloudflare 混合版使用 `wrangler.hybrid.jsonc`，部署见 [混合版说明](docs/cloudflare-hybrid.md)；`npm run test:hybrid` 验证 workerd + D1 中的协议执行且没有浏览器调用。
 - 原纯协议 Cloudflare Worker / Node 保留为实验路径，未通过真实登录整体验收，见 [纯协议说明](docs/pure-protocol.md)。Docker 默认已改用 Chromium；纯协议 Node 入口是 `npm run start:protocol`。
 - Dots 直控版使用宿主云浏览器和已保存的定时任务，不访问现有管理 API。构建包用 `npm run build:dots`，验证状态逻辑用 `python3 tests/dots_state_test.py`，详见 [使用与验收](docs/dots.md)。
 

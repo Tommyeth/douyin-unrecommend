@@ -44,6 +44,7 @@ export class Douyin {
     public http: Http,
     public cfg: Config,
     public signer = new Signer(),
+    public browserQuery: Record<string, string> = {},
   ) {}
   async request(path: string, extra: Record<string, string> = {}, body?: Record<string, string>) {
     const q = new URLSearchParams({
@@ -77,6 +78,16 @@ export class Douyin {
       effective_type: '4g',
       round_trip_time: '0',
     });
+    // Reuse only stable browser parameters. Identity, cursors, signatures and
+    // tokens always come from this request / the current cookie jar.
+    for (const key of Object.keys(this.browserQuery)) {
+      if (
+        (q.has(key) || key === 'webid') &&
+        !Object.hasOwn(extra, key) &&
+        !['aid', 'device_platform'].includes(key)
+      )
+        q.set(key, this.browserQuery[key]);
+    }
     for (const [key, cookie] of [
       ['uifid', 'UIFID'],
       ['verifyFp', 's_v_web_id'],
@@ -135,7 +146,7 @@ export class Douyin {
           min_cursor: '0',
           whale_cut_token: '',
           count: '18',
-          from: '0',
+          from: '1',
         }),
       );
       for (const v of batch.videos) {

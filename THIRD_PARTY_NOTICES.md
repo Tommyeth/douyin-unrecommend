@@ -116,3 +116,7 @@ Vercel Chromium 使用 [Noto CJK](https://github.com/notofonts/noto-cjk) 的 `No
 - [noVNC](https://github.com/novnc/noVNC/tree/v1.7.0) 1.7.0，核心 MPL-2.0；[许可说明](licenses/novnc.txt)、[MPL 原文](licenses/novnc-mpl-2.0.txt)、[pako 许可](licenses/novnc-pako.txt)。通过锁定的 npm 包打包原始客户端，不修改上游文件；对应源码可从上游标签或 `npm pack @novnc/novnc@1.7.0` 获取。
 - [ws](https://github.com/websockets/ws) 8.23.0，MIT；[许可](licenses/ws.txt)。仅在 Docker 的同源鉴权入口转发 RFB 数据。
 - Docker 的 Xvfb、Openbox、x11vnc、字体与系统库由 Debian 软件包安装，各自版权和许可保留在镜像 `/usr/share/doc/`；Chromium 由锁定版本的 Playwright 安装。
+
+## Cloudflare Browser Run
+
+混合版使用 [@cloudflare/playwright](https://github.com/cloudflare/browser-run/tree/main/packages/playwright-cloudflare) 1.4.0（Apache-2.0）；[许可证](licenses/cloudflare-browser-run.txt)。包中 Playwright 代码仍适用上述 Playwright 许可与 NOTICE。远端 Chromium 由 Cloudflare Browser Run 服务提供，本仓库不分发其二进制。
