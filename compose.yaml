@@ -6,14 +6,17 @@ services:
     env_file: .env
     environment:
       HOST: 0.0.0.0
-      DATABASE_PATH: /app/data/state.sqlite
+      DATABASE_PATH: /app/data/browser.sqlite
+      DESKTOP_ENABLED: "1"
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
-      - ./data:/app/data
-    shm_size: 256mb
+      - douyin-data:/app/data
+    shm_size: 512mb
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+volumes:
+  douyin-data:

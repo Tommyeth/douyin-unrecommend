@@ -205,13 +205,14 @@ export async function changeState<T>(
   backend: StateBackend,
   fn: (store: Store, control: LoginControl) => Promise<T>,
   kind: 'operation' | 'login' = 'operation',
+  leaseDuration = 360000,
 ) {
   const { state, etag } = await backend.read();
   if (state.lease && state.lease.expires > Date.now())
     throw new SafeError('BUSY', '已有检测或扫码任务正在运行。', 409);
   const db = memory(state.rows);
   const owner = crypto.randomUUID();
-  state.lease = { owner, expires: Date.now() + 360000, kind };
+  state.lease = { owner, expires: Date.now() + leaseDuration, kind };
   let claimed: string;
   try {
     claimed = await backend.write(state, etag);

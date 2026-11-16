@@ -110,3 +110,9 @@ THE SOFTWARE.
 ## 中文验证画面字体
 
 Vercel Chromium 使用 [Noto CJK](https://github.com/notofonts/noto-cjk) 的 `NotoSansCJKsc-Regular.otf`，上游提交固定为 `f8d157532fbfaeda587e826d4cd5b21a49186f7c`，SIL Open Font License 1.1，原始许可见 [licenses/noto-cjk.txt](licenses/noto-cjk.txt)。构建时下载并校验 SHA-256，原始字体不修改；函数启动前配置到 Chromium 的字体目录。字体不提交为仓库二进制文件。
+
+## Docker 远程桌面
+
+- [noVNC](https://github.com/novnc/noVNC/tree/v1.7.0) 1.7.0，核心 MPL-2.0；[许可说明](licenses/novnc.txt)、[MPL 原文](licenses/novnc-mpl-2.0.txt)、[pako 许可](licenses/novnc-pako.txt)。通过锁定的 npm 包打包原始客户端，不修改上游文件；对应源码可从上游标签或 `npm pack @novnc/novnc@1.7.0` 获取。
+- [ws](https://github.com/websockets/ws) 8.23.0，MIT；[许可](licenses/ws.txt)。仅在 Docker 的同源鉴权入口转发 RFB 数据。
+- Docker 的 Xvfb、Openbox、x11vnc、字体与系统库由 Debian 软件包安装，各自版权和许可保留在镜像 `/usr/share/doc/`；Chromium 由锁定版本的 Playwright 安装。

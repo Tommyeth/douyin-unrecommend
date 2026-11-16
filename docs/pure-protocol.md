@@ -1,3 +1,5 @@
+> 本文记录纯协议实验路径，尚未完成真实登录验收。当前 Docker 默认使用 Chromium + noVNC，部署见 [README](../README.md)。纯协议 Node 入口改为 `npm run start:protocol`，不要使用本文旧 Docker 命令启动纯协议版。
+
 # 抖音推荐防误触
 
 发现自己不小心点了「推荐」？这个工具定时读取**个人主页 → 推荐**，支持发消息提醒，也支持检测后自动取消。
@@ -51,14 +53,14 @@ flowchart LR
 
 签名、Passport 参数和环境档案参考 MIT 开源项目 [yunsur/douyin-mcp](https://github.com/yunsur/douyin-mcp/tree/7e90d139007f141cb7389aa509d8e6e67f7b5840/douyin)，固定来源与许可证见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。这是针对本项目所需接口的 TypeScript 适配，没有移植上游 TLS 指纹实现。令牌报告仍包含上游预设设备档案；动态脚本内的 DOM 由 LinkeDOM 维护，Canvas 2D 则通过 Skia 实际绘制像素、PNG 与文字。两者的指纹一致性尚未完成，不能视为完整 Chromium 或用户 Safari 的环境。支持范围及缺失项见 [环境兼容性说明](environment-compatibility.md)。Worker 的出站网络与 Go 客户端不同，不能据上游的成功记录推断本项目适用于所有账号和地区。
 
-## 方案一：纯 Cloudflare（推荐）
+## 方案一：纯 Cloudflare（实验）
 
 需要 Node.js 22.13+（建议 24 LTS）、一个可使用 Workers 与 D1 的 Cloudflare 账号。
 
 ### 1. 安装并创建数据库
 
 ```bash
-git clone --branch feat/pure-protocol https://github.com/Tommyeth/douyin-unrecommend.git
+git clone https://github.com/Tommyeth/douyin-unrecommend.git
 cd douyin-unrecommend
 npm ci
 npx wrangler login

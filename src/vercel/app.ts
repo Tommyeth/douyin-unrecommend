@@ -6,6 +6,7 @@ import { SafeError, safeError } from '../types.js';
 import { BrowserService } from '../browser/service.js';
 import type { LaunchBrowser } from '../browser/launch.js';
 import { renderHtml } from '../ui.js';
+import { vercelPolicy, type BrowserPolicy } from '../browser/policy.js';
 import {
   blobBackend,
   changeState,
@@ -19,11 +20,19 @@ export function vercelApp(
   env: Record<string, unknown> = process.env,
   backend?: StateBackend,
   launch?: LaunchBrowser,
+  options: {
+    policy?: BrowserPolicy;
+    desktop?: {
+      cookie(session: string, origin: string): Promise<string>;
+      close(session: string): void;
+    };
+  } = {},
 ) {
+  const policy = options.policy ?? vercelPolicy;
   const cfg = config(env);
   backend ??= blobBackend(cfg.authSecret);
   const service = (store: import('../store.js').Store) =>
-    new BrowserService(cfg, store, nodeMail, launch);
+    new BrowserService(cfg, store, nodeMail, launch, policy);
   const change = <T>(fn: (s: BrowserService) => Promise<T>) =>
     changeState(backend!, (store) => fn(service(store)));
   const api = new Hono();
@@ -33,18 +42,18 @@ export function vercelApp(
     c.header('Referrer-Policy', 'no-referrer');
     c.header(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
     await next();
   });
-  api.get('/', (c) => c.html(renderHtml(true)));
-  api.get('/healthz', (c) => c.json({ ok: true, runtime: 'vercel-chromium' }));
+  api.get('/', (c) => c.html(renderHtml(true, policy)));
+  api.get('/healthz', (c) => c.json({ ok: true, runtime: policy.runtime }));
   api.use('/api/*', async (c, next) => {
     const auth = c.req.header('Authorization') ?? '';
     if (!auth.startsWith('Bearer ') || !(await validToken(auth.slice(7), cfg.adminToken)))
       return c.json({ error: 'UNAUTHORIZED', message: '管理员口令无效。' }, 401);
     const origin = c.req.header('Origin');
-    const expectedOrigin = new URL(c.req.url);
+    const expectedOrigin = new URL(String(env.PUBLIC_ORIGIN || c.req.url));
     // Vercel terminates TLS before the Node adapter, whose internal request URL is HTTP.
     // Keep matching the routed host, without trusting a client-supplied forwarded header.
     if (env.VERCEL === '1') expectedOrigin.protocol = 'https:';
@@ -58,7 +67,8 @@ export function vercelApp(
       await readState(backend!, async (store, busy) => ({
         ...(await service(store).status()),
         busy,
-        runtime: 'vercel-chromium',
+        runtime: policy.runtime,
+        capabilities: policy,
       })),
     ),
   );
@@ -77,11 +87,20 @@ export function vercelApp(
   api.post('/api/login/input', async (c) =>
     c.json(await queueLoginInput(backend!, await c.req.json())),
   );
+  api.post('/api/desktop/session', async (c) => {
+    if (!options.desktop || !policy.desktop)
+      throw new SafeError('DESKTOP_DISABLED', '此部署不提供桌面连接。', 404);
+    const { session } = await c.req.json();
+    const origin = new URL(String(env.PUBLIC_ORIGIN || c.req.url)).origin;
+    c.header('Set-Cookie', await options.desktop.cookie(session, origin));
+    return c.json({ ok: true });
+  });
   api.post('/api/login/stream', (c) => {
     const controller = new AbortController();
     const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
     const encoder = new TextEncoder();
     let cancelled = false;
+    let session = '';
     const stream = new ReadableStream<Uint8Array>({
       async start(output) {
         const emit = (value: unknown) => {
@@ -91,14 +110,19 @@ export function vercelApp(
         try {
           await changeState(
             backend!,
-            (store, control) => service(store).login(signal, emit, control),
+            (store, control) => {
+              session = control.session;
+              return service(store).login(signal, emit, control);
+            },
             'login',
+            Math.max(360000, policy.loginTimeout + 60000),
           );
           emit({ type: 'confirmed' });
         } catch (e) {
           const error = safeError(e);
           emit({ type: 'error', code: error.code, message: error.message });
         } finally {
+          options.desktop?.close(session);
           if (!cancelled) output.close();
         }
       },
@@ -128,6 +152,7 @@ export async function scheduledPoll(
   env: Record<string, unknown> = process.env,
   backend?: StateBackend,
   launch?: LaunchBrowser,
+  policy: BrowserPolicy = vercelPolicy,
 ) {
   const cfg = config(env);
   backend ??= blobBackend(cfg.authSecret);
@@ -143,7 +168,7 @@ export async function scheduledPoll(
     return await changeState(backend, async (store) => {
       if ((await store.get('last_schedule_id')) === executionId) return { skipped: true };
       await store.set('last_schedule_id', executionId);
-      return new BrowserService(cfg, store, nodeMail, launch).poll(true, scheduledAt);
+      return new BrowserService(cfg, store, nodeMail, launch, policy).poll(true, scheduledAt);
     });
   } catch (e) {
     if (e instanceof SafeError && e.code === 'BUSY') return { skipped: true, reason: 'busy' };

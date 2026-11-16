@@ -16,8 +16,40 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build:vercel
+      - run: npm run build:desktop
       - run: npx playwright-core install --with-deps chromium
       - run: npm test
       - run: npm run test:worker
         env:
-          WRANGLER_SEND_METRICS: "false"
+          WRANGLER_SEND_METRICS: 'false'
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t douyin-desktop .
+      - name: Start container and check health
+        run: |
+          docker run -d --name desktop --shm-size=512m \
+            -e ADMIN_TOKEN=fixture-admin-token-for-container-ci-000000 \
+            -e AUTH_SECRET=fixture-encryption-key-for-container-ci-111111 \
+            douyin-desktop
+          for attempt in $(seq 1 30); do
+            if docker exec desktop node -e "fetch('http://127.0.0.1:8787/healthz').then(r=>{if(!r.ok)process.exit(1)})"; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Real browser through noVNC
+        run: |
+          docker cp tests desktop:/app/tests
+          docker exec desktop node --import tsx tests/docker-desktop.integration.ts
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          docker logs desktop
+          docker cp desktop:/tmp/artifacts ./artifacts || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-desktop
+          path: artifacts
