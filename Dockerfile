@@ -14,8 +14,8 @@ COPY migrations ./migrations
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses ./licenses
 COPY docker/supervisord.conf /etc/supervisor/supervisord.conf
-RUN npm run build:desktop && mkdir -p /app/data /tmp/runtime-node \
-    && chown -R node:node /app/data /tmp/runtime-node && chmod 700 /tmp/runtime-node
+RUN npm run build:desktop && mkdir -p /app/data /tmp/runtime-node /tmp/.X11-unix \
+    && chown -R node:node /app/data /tmp/runtime-node && chmod 700 /tmp/runtime-node && chmod 1777 /tmp/.X11-unix
 ENV HOST=0.0.0.0 PORT=8787 DATABASE_PATH=/app/data/browser.sqlite \
     DISPLAY=:99 DESKTOP_ENABLED=1 XDG_RUNTIME_DIR=/tmp/runtime-node
 USER node

@@ -62,6 +62,10 @@ try {
     () => document.querySelector('#desktopState')?.textContent?.startsWith('已连接'),
     { timeout: 30000 },
   );
+  await page.locator('#connectDesktop').click();
+  await page.waitForFunction(() =>
+    document.querySelector('#desktopState')?.textContent?.startsWith('已连接'),
+  );
   await remotePage!.locator('#code').waitFor();
   const location = await remotePage!.locator('#code').evaluate((el) => {
     const r = el.getBoundingClientRect();
