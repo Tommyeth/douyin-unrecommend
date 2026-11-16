@@ -1,4 +1,9 @@
-import { requireChannels, type Config } from './config.js';
+import { type Config } from './config.js';
+import {
+  notificationChannels,
+  notificationSettings,
+  saveNotificationSettings,
+} from './notification-settings.js';
 import { flush } from './notify.js';
 import { Store } from './store.js';
 import { SafeError, safeError, type MailConnect, type Snapshot, type Video } from './types.js';
@@ -16,14 +21,43 @@ export abstract class Workflow {
     public mail: MailConnect,
   ) {}
   abstract withClient<T>(fn: (bot: RecommendationClient) => Promise<T>): Promise<T>;
-  protected flushNotifications() {
-    return flush(this.store, this.cfg.channels, this.mail);
+  protected async flushNotifications() {
+    return flush(this.store, await this.notificationChannels(), this.mail);
+  }
+  notificationChannels() {
+    return notificationChannels(this.store, this.cfg);
+  }
+  notificationSettings() {
+    return notificationSettings(this.store, this.cfg);
+  }
+  saveNotificationSettings(raw: unknown) {
+    return saveNotificationSettings(this.store, this.cfg, raw);
+  }
+  async pendingNotificationDelivery(now = Date.now()) {
+    const names = await this.channels();
+    if (!names.length) return false;
+    return (
+      (
+        await this.store.db.all(
+          `SELECT id FROM outbox WHERE sent_at IS NULL AND next_at<=? AND channel IN (${names.map(() => '?').join(',')}) LIMIT 1`,
+          now,
+          ...names,
+        )
+      ).length > 0
+    );
+  }
+  async retryNotifications() {
+    return this.store.lock(async () => ({
+      skipped: true,
+      reason: 'notification_retry',
+      notifications: await this.flushNotifications(),
+    }));
   }
   async closeLogin() {
     await this.store.delete('login');
   }
-  channels() {
-    return this.cfg.channels.map((c) => c.name);
+  async channels() {
+    return (await this.notificationChannels()).map((c) => c.name);
   }
   async settings() {
     return {
@@ -68,7 +102,17 @@ export abstract class Workflow {
       if (login && (JSON.parse(login) as Login).expires >= Date.now())
         return { skipped: true, reason: 'login_active' };
       const settings = await this.settings();
-      if (settings.mode === 'notify') requireChannels(this.cfg);
+      if (
+        scheduled &&
+        JSON.parse((await this.store.get('error')) ?? 'null')?.code === 'LOGIN_REQUIRED'
+      )
+        return {
+          skipped: true,
+          reason: 'login_required',
+          notifications: await this.flushNotifications(),
+        };
+      if (settings.mode === 'notify' && !(await this.channels()).length)
+        throw new SafeError('NO_CHANNELS', '请先配置至少一个通知渠道。', 400);
       await this.store.set(
         'next_poll',
         String((scheduled ? scheduledAt : Date.now()) + settings.interval * 1000),
@@ -78,14 +122,18 @@ export abstract class Workflow {
       try {
         result = await this.withClient(async (bot) => {
           let snapshot = await bot.scan();
-          const added = await this.store.observe(snapshot, this.channels(), this.cfg.ignoreIds);
+          const added = await this.store.observe(
+            snapshot,
+            await this.channels(),
+            this.cfg.ignoreIds,
+          );
           let removed = 0;
           if (settings.mode === 'auto_cancel') {
             for (const video of snapshot.videos
               .filter((v) => !this.cfg.ignoreIds.has(v.id))
               .slice(0, this.cfg.maxActions)) {
               snapshot = await bot.cancel(video);
-              await this.store.removed(video, this.channels());
+              await this.store.removed(video, await this.channels());
               removed++;
             }
           }
@@ -117,10 +165,13 @@ export abstract class Workflow {
           {
             id: `error:${error.code}:${Math.floor(Date.now() / 3600000)}`,
             kind: 'error',
-            title: '抖音检测任务需要处理',
-            body: error.message,
+            title: error.code === 'LOGIN_REQUIRED' ? '抖音登录已失效' : '抖音检测任务需要处理',
+            body:
+              error.code === 'LOGIN_REQUIRED'
+                ? '自动任务已暂停，请打开管理面板重新扫码登录。'
+                : error.message,
           },
-          this.channels(),
+          await this.channels(),
         );
       }
       const notifications = await this.flushNotifications();
@@ -156,14 +207,14 @@ export abstract class Workflow {
       await this.store.delete('plan'); // 一次性令牌，断线后不自动重复执行。
       return this.withClient(async (bot) => {
         const snapshot = await bot.scan();
-        await this.store.observe(snapshot, this.channels(), this.cfg.ignoreIds);
+        await this.store.observe(snapshot, await this.channels(), this.cfg.ignoreIds);
         const candidates = snapshot.videos.filter(
           (v) => plan.ids.includes(v.id) && !this.cfg.ignoreIds.has(v.id),
         );
         let removed = 0;
         for (const video of candidates) {
           await bot.cancel(video);
-          await this.store.removed(video, this.channels());
+          await this.store.removed(video, await this.channels());
           removed++;
         }
         return { removed, notifications: await this.flushNotifications() };
@@ -171,8 +222,9 @@ export abstract class Workflow {
     });
   }
   async testNotify() {
-    requireChannels(this.cfg);
     return this.store.lock(async () => {
+      if (!(await this.channels()).length)
+        throw new SafeError('NO_CHANNELS', '请先配置至少一个通知渠道。', 400);
       await this.store.enqueue(
         {
           id: `test:${crypto.randomUUID()}`,
@@ -180,7 +232,7 @@ export abstract class Workflow {
           title: '抖音推荐防误触 · 测试通知',
           body: '通知渠道连通性测试。',
         },
-        this.channels(),
+        await this.channels(),
       );
       return this.flushNotifications();
     });
@@ -191,7 +243,7 @@ export abstract class Workflow {
       loginDiagnostic: JSON.parse((await this.store.get('login_diagnostic')) ?? 'null'),
       browserDiagnostic: JSON.parse((await this.store.get('browser_diagnostic')) ?? 'null'),
       ...(await this.settings()),
-      channels: this.channels(),
+      channels: await this.channels(),
       lastScan: JSON.parse((await this.store.get('last_scan')) ?? 'null'),
       error: JSON.parse((await this.store.get('error')) ?? 'null'),
       lastSuccess: Number((await this.store.get('last_success')) ?? 0),

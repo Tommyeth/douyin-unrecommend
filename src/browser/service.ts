@@ -47,8 +47,14 @@ export class BrowserService extends Workflow {
         400,
       );
   }
-  protected flushNotifications() {
-    return flush(this.store, this.cfg.channels, this.mail, Date.now(), this.notificationDeadline);
+  protected async flushNotifications() {
+    return flush(
+      this.store,
+      await this.notificationChannels(),
+      this.mail,
+      Date.now(),
+      this.notificationDeadline,
+    );
   }
   private async storedProfile(): Promise<AccountProfile | null> {
     const raw = await this.store.get('account_profile');

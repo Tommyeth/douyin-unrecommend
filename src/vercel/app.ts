@@ -64,7 +64,10 @@ export function vercelApp(
     // Keep matching the routed host, without trusting a client-supplied forwarded header.
     if (env.VERCEL === '1') expectedOrigin.protocol = 'https:';
     if (origin && origin !== expectedOrigin.origin) return c.json({ error: 'ORIGIN' }, 403);
-    if (Number(c.req.header('Content-Length') ?? 0) > 2048)
+    if (
+      Number(c.req.header('Content-Length') ?? 0) >
+      (c.req.path === '/api/notifications/config' ? 16384 : 2048)
+    )
       return c.json({ error: 'TOO_LARGE' }, 413);
     await next();
   });
@@ -108,6 +111,14 @@ export function vercelApp(
   api.post('/api/clear', async (c) => {
     const { token } = await c.req.json();
     return c.json(await change((s) => s.clear(token)));
+  });
+  api.get('/api/notifications/config', async (c) =>
+    c.json(await readState(backend!, (store) => service(store).notificationSettings())),
+  );
+  api.post('/api/notifications/config', async (c) => {
+    const body = await c.req.text();
+    if (body.length > 16384) throw new SafeError('TOO_LARGE', '通知设置过大。', 413);
+    return c.json(await change((s) => s.saveNotificationSettings(JSON.parse(body))));
   });
   api.post('/api/notifications/test', async (c) => c.json(await change((s) => s.testNotify())));
   api.post('/api/login/cancel', async (c) => c.json(await requestLoginCancel(backend!)));
@@ -185,13 +196,13 @@ export async function scheduledPoll(
   const cfg = config(env);
   backend ??= blobBackend(cfg.authSecret);
   const due = await readState(backend, async (store) => {
+    const service =
+      policy.runtime === 'vercel-hybrid'
+        ? new VercelHybridService(cfg, store, nodeMail, launch, policy, transport)
+        : new BrowserService(cfg, store, nodeMail, launch, policy);
+    if (await service.pendingNotificationDelivery()) return true;
     if (!(await store.get('auth'))) return false;
-    if (
-      policy.runtime === 'vercel-hybrid' &&
-      !(await new VercelHybridService(cfg, store, nodeMail, launch, policy, transport).status())
-        .loggedIn
-    )
-      return false;
+    if (policy.runtime === 'vercel-hybrid' && !(await service.status()).loggedIn) return false;
     return (
       scheduledAt >= Number((await store.get('next_poll')) ?? 0) &&
       (await store.get('last_schedule_id')) !== executionId
@@ -207,7 +218,10 @@ export async function scheduledPoll(
           ? new VercelHybridService(cfg, store, nodeMail, launch, policy, transport)
           : new BrowserService(cfg, store, nodeMail, launch, policy);
       try {
-        const result = await service.poll(true, scheduledAt);
+        const result =
+          policy.runtime === 'vercel-hybrid' && !(await service.status()).loggedIn
+            ? await service.retryNotifications()
+            : await service.poll(true, scheduledAt);
         await store.set(
           'schedule_diagnostic',
           JSON.stringify({

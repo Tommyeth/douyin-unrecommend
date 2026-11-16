@@ -55,7 +55,7 @@ npx vercel@65.16.0 env add AUTH_SECRET production --sensitive
 - `AUTH_SECRET` 加密登录态和任务记录；丢失后无法恢复原状态。
 - Blob 必须选择 **Private**。创建并关联项目后，CLI 自动配置其凭证。
 
-需要提醒时，参照 [通知示例](../examples/notifications.json) 配置自己的渠道，把 JSON 数组粘贴到敏感环境变量；只用自动取消可省略：
+需要提醒时，可部署后直接在面板「消息通知」配置，详见 [通知设置](configuration.md)。也可参照 [通知示例](../examples/notifications.json) 使用敏感环境变量作为默认值；只用自动取消可省略通知变量：
 
 ```bash
 npx vercel@65.16.0 env add NOTIFICATIONS_JSON production --sensitive
