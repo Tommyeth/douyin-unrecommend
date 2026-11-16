@@ -75,16 +75,34 @@ try {
     };
   });
   const canvas = page.locator('#desktopViewport canvas');
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('#desktopViewport canvas') as HTMLCanvasElement;
+    if (!canvas?.width) return false;
+    const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let white = 0;
+    for (let i = 0; i < pixels.length; i += 400)
+      if (pixels[i] > 200 && pixels[i + 1] > 200 && pixels[i + 2] > 200) white++;
+    return white > 200;
+  });
   const box = (await canvas.boundingBox())!;
   // Physical framebuffer is configured to 1280 × 900; noVNC scales it in CSS.
   await canvas.click({
     position: { x: (location.x / 1280) * box.width, y: (location.y / 900) * box.height },
   });
-  await page.keyboard.type('fixture-code');
+  await remotePage!.waitForFunction(() => document.activeElement?.id === 'code');
+  await page.keyboard.type('fixture-code', { delay: 35 });
   await remotePage!.waitForFunction(
     () => (document.querySelector('#code') as HTMLInputElement).value === 'fixture-code',
   );
   await mkdir('/tmp/artifacts', { recursive: true });
+  // Wait for the next framebuffer update after typing, rather than capturing the old frame.
+  const before = await canvas.evaluate((el) => (el as HTMLCanvasElement).toDataURL());
+  await page.waitForFunction(
+    (previous) =>
+      (document.querySelector('#desktopViewport canvas') as HTMLCanvasElement).toDataURL() !==
+      previous,
+    before,
+  );
   await page.screenshot({ path: '/tmp/artifacts/docker-desktop.png', fullPage: true });
   await page.keyboard.press('Enter');
   await page.waitForFunction(
@@ -98,6 +116,30 @@ try {
   console.log(
     'PASS: real noVNC mouse/keyboard/Enter → Chromium fixture login → encrypted persistence; 300-second settings saved.',
   );
+} catch (error) {
+  await mkdir('/tmp/artifacts', { recursive: true });
+  for (const [i, page] of client
+    .contexts()
+    .flatMap((c) => c.pages())
+    .entries())
+    await page
+      .screenshot({ path: `/tmp/artifacts/failure-${i}.png`, fullPage: true })
+      .catch(() => {});
+  await remotePage!.screenshot({ path: '/tmp/artifacts/remote-failure.png' }).catch(() => {});
+  console.error(
+    'Fixture focus:',
+    await remotePage!
+      .evaluate(() => ({
+        active: document.activeElement?.tagName,
+        id: document.activeElement?.id,
+        screenX,
+        screenY,
+        outerHeight,
+        innerHeight,
+      }))
+      .catch(() => null),
+  );
+  throw error;
 } finally {
   await client.close();
   await remote.close();
