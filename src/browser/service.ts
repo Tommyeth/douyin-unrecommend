@@ -255,7 +255,26 @@ export class BrowserService extends Workflow {
           context = await this.context(browser, saved.state);
           const bot = new Douyin(await context.newPage(), this.cfg);
           try {
-            return await fn(bot);
+            const result = await fn(bot);
+            await this.store.delete('browser_diagnostic');
+            return result;
+          } catch (e) {
+            await this.store.set(
+              'browser_diagnostic',
+              JSON.stringify({
+                ...bot.diagnostic,
+                name: e instanceof Error ? e.name : 'unknown',
+                reason:
+                  e instanceof Error
+                    ? e.message
+                        .split('\n')[0]
+                        .replace(/https?:\/\/\S+/g, '[url]')
+                        .slice(0, 180)
+                    : '',
+                at: Date.now(),
+              }),
+            );
+            throw e;
           } finally {
             await this.store.set(
               'auth',

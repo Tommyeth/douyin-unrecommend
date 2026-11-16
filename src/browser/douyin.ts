@@ -74,6 +74,13 @@ export async function identity(page: Page, timeout = 10000): Promise<string> {
 export class Douyin {
   private feedURL = '';
   private scanned = new Set<string>();
+  diagnostic: {
+    stage: string;
+    requests: number;
+    responses: number;
+    http?: number;
+    failure?: string;
+  } = { stage: 'start', requests: 0, responses: 0 };
   constructor(
     public page: Page,
     public cfg: Config,
@@ -81,26 +88,42 @@ export class Douyin {
     page.setDefaultTimeout(cfg.timeout);
   }
   async scan(): Promise<Snapshot> {
+    this.diagnostic = { stage: 'navigation', requests: 0, responses: 0 };
     this.feedURL = '';
     this.scanned.clear();
     const page = this.page;
     const queue: Response[] = [];
     const onResponse = (response: Response) => {
-      if (isFeed(response.url())) queue.push(response);
+      if (isFeed(response.url())) {
+        this.diagnostic.responses++;
+        this.diagnostic.http = response.status();
+        queue.push(response);
+      }
+    };
+    const onRequest = (request: import('playwright-core').Request) => {
+      if (isFeed(request.url())) this.diagnostic.requests++;
+    };
+    const onFailure = (request: import('playwright-core').Request) => {
+      if (isFeed(request.url())) this.diagnostic.failure = request.failure()?.errorText;
     };
     page.on('response', onResponse);
+    page.on('request', onRequest);
+    page.on('requestfailed', onFailure);
     const waitResponse = async (ms: number) => {
       const until = Date.now() + ms;
       while (!queue.length && Date.now() < until) await sleep(150);
       return queue.shift();
     };
     try {
-      await page.goto(HOME, { waitUntil: 'domcontentloaded' });
+      await page.goto(HOME, { waitUntil: 'commit' });
+      this.diagnostic.stage = 'identity';
       const account = await identity(page);
+      this.diagnostic.stage = 'tab';
       if ((await page.locator('#semiTabrecommend').getAttribute('aria-selected')) !== 'true')
         throw new SafeError('WRONG_TAB', '未进入个人推荐标签，停止读取。');
       let response = await waitResponse(1500);
       if (!response) {
+        this.diagnostic.stage = 'switch_tab';
         // 首屏可能由服务端渲染；切换标签使官方页面重新发起推荐接口请求。
         await page.locator('#semiTablike').click();
         await page.locator('#semiTabrecommend').click();
@@ -108,6 +131,7 @@ export class Douyin {
       }
       if (!response)
         throw new SafeError('FEED_TIMEOUT', '推荐接口未返回。页面空白不代表没有推荐。');
+      this.diagnostic.stage = 'feed';
       const found = new Map<string, Video>();
       const cursors = new Set<string>();
       for (let i = 0; i < this.cfg.maxPages; i++) {
@@ -147,6 +171,8 @@ export class Douyin {
       return { videos: [...found.values()], complete: false, pages: this.cfg.maxPages, account };
     } finally {
       page.off('response', onResponse);
+      page.off('request', onRequest);
+      page.off('requestfailed', onFailure);
     }
   }
 

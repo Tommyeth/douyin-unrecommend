@@ -188,6 +188,7 @@ export abstract class Workflow {
     return {
       loggedIn: !!(await this.store.get('auth')),
       loginDiagnostic: JSON.parse((await this.store.get('login_diagnostic')) ?? 'null'),
+      browserDiagnostic: JSON.parse((await this.store.get('browser_diagnostic')) ?? 'null'),
       ...(await this.settings()),
       channels: this.channels(),
       lastScan: JSON.parse((await this.store.get('last_scan')) ?? 'null'),
